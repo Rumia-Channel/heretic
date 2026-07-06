@@ -2,6 +2,7 @@
 # Copyright (C) 2025-2026  Philipp Emanuel Weidmann <pew@worldwidemann.com> + contributors
 
 import lm_eval
+import torch
 import torch.nn.functional as F
 from lm_eval.models.huggingface import HFLM
 from torch import Tensor
@@ -112,12 +113,22 @@ class Evaluator:
         else:
             print("  * Obtaining first-token probability distributions...")
             logprobs = self.model.get_logprobs_batched(self.good_prompts)
+
+            # Guard against NaN/inf logprobs before KL divergence calculation.
+            if torch.isnan(logprobs).any() or torch.isinf(logprobs).any():
+                logprobs = torch.nan_to_num(logprobs, nan=0.0, posinf=0.0, neginf=-1e10)
+
             kl_divergence = F.kl_div(
                 logprobs,
                 self.base_logprobs,
                 reduction="batchmean",
                 log_target=True,
             ).item()
+
+            # Guard against NaN KL divergence.
+            if kl_divergence != kl_divergence:
+                kl_divergence = 1e10
+
             print(f"  * KL divergence: [bold]{kl_divergence:.4f}[/]")
 
         print("  * Counting model refusals...")

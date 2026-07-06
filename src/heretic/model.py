@@ -183,12 +183,10 @@ class Model:
         assert isinstance(self.model, PreTrainedModel)
 
         # Always use LoRA adapters for abliteration (faster reload, no weight modification).
-        # Collect actual leaf module names from the model for LoRA targeting.
-        # This is more robust than splitting component keys (e.g. "attn.o_proj" -> "o_proj")
-        # because hybrid models like Qwen3.5 MoE have modules with different names
-        # across layers (e.g. "o_proj" on attention layers, "out_proj" on linear attention layers).
+        # Collect full module paths for LoRA targeting. Models with hybrid
+        # attention can have same-named leaf modules with different shapes.
         target_modules_set: set[str] = set()
-        
+
         module_id_to_full_name = {
             id(module): module_name
             for module_name, module in self.model.named_modules()
@@ -664,15 +662,24 @@ class Model:
                         loss.backward()
                         return loss
 
+                    original_matrix = matrix.data.clone()
+
                     # Convergence usually happens within 2-3 steps, so this is more than enough.
                     for step in range(5):
                         loss = optimizer.step(closure)
-                        # print(
-                        #    f"\\[{layer_index}/{component}/{module_index}] Step: {step}, Loss: {loss.item():.6f}"
-                        # )
+                        if torch.isnan(loss).any() or torch.isinf(loss).any():
+                            matrix.data.copy_(original_matrix)
+                            break
+                        if torch.isnan(matrix).any() or torch.isinf(matrix).any():
+                            matrix.data.copy_(original_matrix)
+                            break
 
                     with torch.no_grad():
-                        matrix.copy_(get_matrix())
+                        result = get_matrix()
+                        if torch.isnan(result).any() or torch.isinf(result).any():
+                            matrix.data.copy_(original_matrix)
+                        else:
+                            matrix.copy_(result)
 
     def ara_lora_abliterate(
         self,
@@ -701,8 +708,7 @@ class Model:
                         W_base = cast(
                             Tensor,
                             bnb.functional.dequantize_4bit(
-                                base_weight.data, 
-                                quant_state
+                                base_weight.data, quant_state
                             ).to(torch.float32),
                         )
 
@@ -718,8 +724,12 @@ class Model:
 
                     # Data preparation.
                     # Move I/O tensors to the device of the adapter weights.
-                    good_input, good_output = good_module_io[layer_index][component][module_index]
-                    bad_input, bad_output = bad_module_io[layer_index][component][module_index]
+                    good_input, good_output = good_module_io[layer_index][component][
+                        module_index
+                    ]
+                    bad_input, bad_output = bad_module_io[layer_index][component][
+                        module_index
+                    ]
 
                     good_input = good_input.float().to(lora_A.device)
                     good_output = good_output.float().to(lora_A.device)
@@ -782,9 +792,25 @@ class Model:
                         loss.backward()
                         return loss
 
+                    original_lora_A = lora_A.data.clone()
+                    original_lora_B = lora_B.data.clone()
+
                     # Run optimization steps.
                     for step in range(5):
-                        optimizer.step(closure)
+                        loss = optimizer.step(closure)
+                        if torch.isnan(loss).any() or torch.isinf(loss).any():
+                            lora_A.data.copy_(original_lora_A)
+                            lora_B.data.copy_(original_lora_B)
+                            break
+                        if (
+                            torch.isnan(lora_A).any()
+                            or torch.isinf(lora_A).any()
+                            or torch.isnan(lora_B).any()
+                            or torch.isinf(lora_B).any()
+                        ):
+                            lora_A.data.copy_(original_lora_A)
+                            lora_B.data.copy_(original_lora_B)
+                            break
 
     def generate(
         self,
@@ -898,6 +924,9 @@ class Model:
         # problems during calculations involving residual vectors.
         residuals = residuals.to(torch.float32)
 
+        if torch.isnan(residuals).any() or torch.isinf(residuals).any():
+            residuals = torch.nan_to_num(residuals, nan=0.0, posinf=1e10, neginf=-1e10)
+
         if 0 <= self.settings.winsorization_quantile < 1:
             # Apply symmetric winsorization to each layer of the per-prompt residuals.
             abs_residuals = torch.abs(residuals)
@@ -960,6 +989,13 @@ class Model:
                 # change between model reloads in multi-GPU configurations.
                 input = inputs[0][:, -1, :].detach().clone().cpu()
                 output = outputs[:, -1, :].detach().clone().cpu()
+
+                if torch.isnan(input).any() or torch.isinf(input).any():
+                    input = torch.nan_to_num(input, nan=0.0, posinf=1e10, neginf=-1e10)
+                if torch.isnan(output).any() or torch.isinf(output).any():
+                    output = torch.nan_to_num(
+                        output, nan=0.0, posinf=1e10, neginf=-1e10
+                    )
 
                 # The modules associated with a component (e.g. expert MLPs)
                 # are not necessarily invoked in order, nor are all of them
@@ -1065,6 +1101,9 @@ class Model:
         # Logits for the first (only) generated token.
         # This cast is valid because we passed output_scores=True above.
         logits = cast(tuple[FloatTensor], outputs.scores)[0]
+
+        if torch.isnan(logits).any() or torch.isinf(logits).any():
+            logits = torch.nan_to_num(logits, nan=0.0, posinf=1e10, neginf=-1e10)
 
         # The returned tensor has shape (prompt, token).
         return F.log_softmax(logits, dim=-1)
