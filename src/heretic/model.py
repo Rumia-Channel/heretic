@@ -822,14 +822,20 @@ class Model:
                         )
 
                     # Optimization loop.
-                    # We optimize A and B, not the base matrix.
+                    # We optimize A and B, not the base matrix. The optimizer
+                    # works on float32 shadow copies because L-BFGS line search
+                    # is unreliable in bfloat16; results are written back to
+                    # the adapter weights afterwards.
+                    opt_A = lora_A.detach().clone().float().requires_grad_(True)
+                    opt_B = lora_B.detach().clone().float().requires_grad_(True)
+
                     # Snapshot the original adapter weights so they can be
                     # restored if the optimization diverges.
                     original_A = lora_A.detach().clone()
                     original_B = lora_B.detach().clone()
 
                     optimizer = LBFGS(
-                        [lora_A, lora_B],
+                        [opt_A, opt_B],
                         lr=1.0,
                         max_iter=20,
                         history_size=10,
@@ -839,7 +845,7 @@ class Model:
                     def closure():
                         optimizer.zero_grad()
                         # Pass the actual tensors being optimized to the objective.
-                        loss = objective(lora_A, lora_B)
+                        loss = objective(opt_A, opt_B)
                         loss.backward()
                         return loss
 
@@ -851,20 +857,24 @@ class Model:
                             diverged = True
                             break
                         if not (
-                            torch.isfinite(lora_A).all()
-                            and torch.isfinite(lora_B).all()
+                            torch.isfinite(opt_A).all()
+                            and torch.isfinite(opt_B).all()
                         ):
                             diverged = True
                             break
 
-                    # Free the gradient buffers accumulated on the LoRA adapter
-                    # parameters during optimization (see ara_abliterate for details).
+                    # Free the gradient buffers accumulated on the shadow
+                    # parameters during optimization (see ara_abliterate for
+                    # details).
                     optimizer.zero_grad(set_to_none=True)
 
-                    if diverged:
-                        with torch.no_grad():
+                    with torch.no_grad():
+                        if diverged:
                             lora_A.copy_(original_A)
                             lora_B.copy_(original_B)
+                        else:
+                            lora_A.copy_(opt_A.to(lora_A.dtype))
+                            lora_B.copy_(opt_B.to(lora_B.dtype))
 
     def generate(
         self,
