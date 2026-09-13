@@ -3,12 +3,24 @@
 
 import lm_eval
 import torch.nn.functional as F
+from dataclasses import dataclass, field
 from lm_eval.models.huggingface import HFLM
 from torch import Tensor
 
 from .config import Settings
-from .model import Model
+from .model import Model, ResponseRecord
 from .utils import Prompt, load_prompts, print
+
+
+# Per-prompt evaluation results, kept separate so that different failure
+# modes (refusal, empty response, missing EOS) are never conflated into
+# a single count.
+@dataclass
+class ResponseStats:
+    refusals: int = 0
+    empty: int = 0
+    hit_max_length: int = 0
+    records: list[ResponseRecord] = field(default_factory=list)
 
 
 class Evaluator:
@@ -41,8 +53,8 @@ class Evaluator:
         self.bad_prompts = load_prompts(settings, settings.bad_evaluation_prompts)
         print(f"* [bold]{len(self.bad_prompts)}[/] prompts loaded")
 
-        print("* Counting model refusals...")
-        self.base_refusals = self.count_refusals()
+        self.base_stats = self.evaluate_responses()
+        self.base_refusals = self.base_stats.refusals
         print(
             f"* Initial refusals: [bold]{self.base_refusals}[/]/{len(self.bad_prompts)}"
         )
@@ -67,35 +79,44 @@ class Evaluator:
 
         return False
 
-    def count_refusals(self) -> int:
-        refusal_count = 0
+    def evaluate_responses(self) -> ResponseStats:
+        stats = ResponseStats()
 
-        responses = self.model.get_responses_batched(
+        records = self.model.get_response_records_batched(
             self.bad_prompts,
             skip_special_tokens=True,
         )
 
-        for prompt, response in zip(self.bad_prompts, responses):
-            is_refusal = self.is_refusal(response)
+        for prompt, record in zip(self.bad_prompts, records):
+            is_refusal = self.is_refusal(record.text)
             if is_refusal:
-                refusal_count += 1
+                stats.refusals += 1
+            if not record.text.strip():
+                stats.empty += 1
+            if record.hit_max_length:
+                stats.hit_max_length += 1
 
             if self.settings.print_responses:
                 print()
                 print(f"[bold]System prompt:[/] {prompt.system}")
                 print(f"[bold]Prompt:[/] {prompt.user}")
+                response = record.text
                 if not response.strip():
                     response = "[italic]\\[empty][/]"
                 print(
                     f"[bold]Response:[/] [{'red' if is_refusal else 'green'}]{response}[/]"
                 )
+                if record.hit_max_length:
+                    print("[yellow]Response reached the maximum length without EOS.[/]")
+
+        stats.records = records
 
         if self.settings.print_responses:
             print()
 
-        return refusal_count
+        return stats
 
-    def get_score(self) -> tuple[tuple[float, float], float, int]:
+    def get_score(self) -> tuple[tuple[float, float], float, ResponseStats]:
         if self.settings.use_piqa:
             print("  * Running PIQA benchmark...")
             hflm = HFLM(
@@ -120,12 +141,20 @@ class Evaluator:
             ).item()
             print(f"  * KL divergence: [bold]{kl_divergence:.4f}[/]")
 
-        print("  * Counting model refusals...")
-        refusals = self.count_refusals()
-        print(f"  * Refusals: [bold]{refusals}[/]/{len(self.bad_prompts)}")
+        print("  * Evaluating model responses...")
+        stats = self.evaluate_responses()
+        print(f"  * Refusals: [bold]{stats.refusals}[/]/{len(self.bad_prompts)}")
+        if stats.empty:
+            print(f"  * Empty responses: [bold]{stats.empty}[/]")
+        if stats.hit_max_length:
+            print(
+                f"  * Reached max length without EOS: [bold]{stats.hit_max_length}[/]"
+            )
 
         refusals_score = (
-            refusals / self.base_refusals if self.base_refusals > 0 else float(refusals)
+            stats.refusals / self.base_refusals
+            if self.base_refusals > 0
+            else float(stats.refusals)
         )
 
         if self.settings.use_piqa:
@@ -134,7 +163,7 @@ class Evaluator:
                 refusals_score,
             )
 
-            return score, -piqa_acc_norm, refusals
+            return score, -piqa_acc_norm, stats
         else:
             kl_divergence_scale = self.settings.kl_divergence_scale
             kl_divergence_target = self.settings.kl_divergence_target
@@ -149,4 +178,4 @@ class Evaluator:
                 refusals_score,
             )
 
-            return score, kl_divergence, refusals
+            return score, kl_divergence, stats

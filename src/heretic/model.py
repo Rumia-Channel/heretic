@@ -71,6 +71,18 @@ class ARAParameters:
 ModuleIO: TypeAlias = list[dict[str, dict[int, tuple[Tensor, Tensor]]]]
 
 
+# A single generated response together with metadata about how it ended.
+# token_ids is truncated at the first EOS token, so it contains only the
+# tokens the model actually produced (batched generation pads finished
+# sequences up to the maximum length).
+@dataclass
+class ResponseRecord:
+    text: str
+    token_ids: list[int]
+    eos_seen: bool
+    hit_max_length: bool
+
+
 class Model:
     model: PreTrainedModel | PeftModel
     tokenizer: PreTrainedTokenizerBase
@@ -901,39 +913,112 @@ class Model:
 
         return inputs, outputs
 
-    def get_responses(
+    def get_response_records(
         self,
         prompts: list[Prompt],
         skip_special_tokens: bool = False,
-    ) -> list[str]:
+    ) -> list[ResponseRecord]:
         inputs, outputs = self.generate(
             prompts,
             max_new_tokens=self.settings.max_response_length,
         )
 
-        return self.tokenizer.batch_decode(
-            # Extract the newly generated part.
-            # This cast is valid because the input_ids property is a Tensor
-            # if the tokenizer is invoked with return_tensors="pt", as above.
-            outputs[:, cast(Tensor, inputs["input_ids"]).shape[1] :],
-            skip_special_tokens=skip_special_tokens,
-        )
+        # Extract the newly generated part.
+        # This cast is valid because the input_ids property is a Tensor
+        # if the tokenizer is invoked with return_tensors="pt", as above.
+        generated = outputs[:, cast(Tensor, inputs["input_ids"]).shape[1] :]
+
+        # Collect every token ID that can terminate generation. Some models
+        # (e.g. gpt-oss) use multiple EOS-like tokens.
+        eos_ids = {
+            token_id
+            for token_id in (
+                self.tokenizer.eos_token_id,
+                self.model.generation_config.eos_token_id,
+            )
+            if token_id is not None
+        }
+        generation_eos = self.model.generation_config.eos_token_id
+        if isinstance(generation_eos, (list, tuple)):
+            eos_ids.update(token_id for token_id in generation_eos if token_id is not None)
+
+        records = []
+        for sequence in generated:
+            token_ids = cast(list[int], sequence.tolist())
+
+            # Batched generation pads finished sequences up to the maximum
+            # length, so truncate at the first EOS token to recover the
+            # tokens the model actually produced.
+            eos_positions = [
+                position
+                for position, token_id in enumerate(token_ids)
+                if token_id in eos_ids
+            ]
+            eos_seen = len(eos_positions) > 0
+            if eos_seen:
+                token_ids = token_ids[: eos_positions[0]]
+
+            records.append(
+                ResponseRecord(
+                    # This cast is valid because str is the return type
+                    # when decoding a single sequence of token IDs.
+                    text=cast(
+                        str,
+                        self.tokenizer.decode(
+                            token_ids,
+                            skip_special_tokens=skip_special_tokens,
+                        ),
+                    ),
+                    token_ids=token_ids,
+                    eos_seen=eos_seen,
+                    hit_max_length=not eos_seen,
+                )
+            )
+
+        return records
+
+    def get_response_records_batched(
+        self,
+        prompts: list[Prompt],
+        skip_special_tokens: bool = False,
+    ) -> list[ResponseRecord]:
+        records = []
+
+        for batch in batchify(prompts, self.settings.batch_size):
+            records.extend(
+                self.get_response_records(
+                    batch,
+                    skip_special_tokens=skip_special_tokens,
+                )
+            )
+
+        return records
+
+    def get_responses(
+        self,
+        prompts: list[Prompt],
+        skip_special_tokens: bool = False,
+    ) -> list[str]:
+        return [
+            record.text
+            for record in self.get_response_records(
+                prompts,
+                skip_special_tokens=skip_special_tokens,
+            )
+        ]
 
     def get_responses_batched(
         self,
         prompts: list[Prompt],
         skip_special_tokens: bool = False,
     ) -> list[str]:
-        responses = []
-
-        for batch in batchify(prompts, self.settings.batch_size):
-            for response in self.get_responses(
-                batch,
+        return [
+            record.text
+            for record in self.get_response_records_batched(
+                prompts,
                 skip_special_tokens=skip_special_tokens,
-            ):
-                responses.append(response)
-
-        return responses
+            )
+        ]
 
     def get_residuals(self, prompts: list[Prompt]) -> Tensor:
         # We only generate one token, and we return the residual vectors

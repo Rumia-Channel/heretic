@@ -642,9 +642,7 @@ def run():
             model.reset_model()
             print("* Abliterating...")
             model.abliterate(refusal_directions, direction_index, parameters)
-        print("* Evaluating...")
-        score, kl_divergence, refusals = evaluator.get_score()
-
+        score, kl_divergence, stats = evaluator.get_score()
         elapsed_time = time.perf_counter() - start_time
         remaining_time = (elapsed_time / (trial_index - start_index)) * (
             settings.n_trials - trial_index
@@ -662,7 +660,9 @@ def run():
         trial.set_user_attr("kl_divergence", kl_divergence)
         if settings.use_piqa:
             trial.set_user_attr("piqa_acc_norm", -kl_divergence)
-        trial.set_user_attr("refusals", refusals)
+        trial.set_user_attr("refusals", stats.refusals)
+        trial.set_user_attr("empty_responses", stats.empty)
+        trial.set_user_attr("max_length_responses", stats.hit_max_length)
 
         return score
 
