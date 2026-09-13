@@ -913,6 +913,65 @@ class Model:
 
         return inputs, outputs
 
+    def get_context_logprobs(
+        self,
+        prompts: list[Prompt],
+        positions: int,
+    ) -> Tensor:
+        # Unlike get_logprobs (which samples the distribution of the first
+        # generated token), this measures the distributions the model assigns
+        # at the last `positions` token positions of the prompt itself, under
+        # teacher forcing on the same fixed prefix for every model.
+        chats = [
+            [
+                {"role": "system", "content": prompt.system},
+                {"role": "user", "content": prompt.user},
+            ]
+            for prompt in prompts
+        ]
+
+        chat_prompts = cast(
+            list[str],
+            self.tokenizer.apply_chat_template(
+                chats,
+                add_generation_prompt=True,
+                tokenize=False,
+            ),
+        )
+
+        if self.response_prefix:
+            chat_prompts = [prompt + self.response_prefix for prompt in chat_prompts]
+
+        inputs = self.tokenizer(
+            chat_prompts,
+            return_tensors="pt",
+            padding=True,
+            return_token_type_ids=False,
+        ).to(self.model.device)
+
+        with torch.no_grad():
+            logits = self.model(**inputs).logits
+
+        # Left padding means every sequence ends at the last position, so the
+        # final `positions` columns hold the logits for the last prompt tokens
+        # of every sequence in the batch.
+        positions = min(positions, logits.shape[1])
+        logits = logits[:, -positions:, :]
+
+        return F.log_softmax(logits.float(), dim=-1).cpu()
+
+    def get_context_logprobs_batched(
+        self,
+        prompts: list[Prompt],
+        positions: int,
+    ) -> Tensor:
+        logprobs = []
+
+        for batch in batchify(prompts, self.settings.batch_size):
+            logprobs.append(self.get_context_logprobs(batch, positions))
+
+        return torch.cat(logprobs, dim=0)
+
     def get_response_records(
         self,
         prompts: list[Prompt],

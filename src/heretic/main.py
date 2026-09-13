@@ -666,6 +666,10 @@ def run():
         trial.set_user_attr("max_length_responses", stats.hit_max_length)
         if stats.kl_divergence is not None:
             trial.set_user_attr("measured_kl_divergence", stats.kl_divergence)
+        if stats.context_kl_divergence is not None:
+            trial.set_user_attr(
+                "context_kl_divergence", stats.context_kl_divergence
+            )
 
         return score
 

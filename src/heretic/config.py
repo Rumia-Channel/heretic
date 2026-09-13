@@ -234,6 +234,16 @@ class Settings(BaseSettings):
         ),
     )
 
+    kl_context_positions: int = Field(
+        default=0,
+        description=(
+            "If > 0, additionally measure the KL divergence over the last N token "
+            "positions of the evaluation prompts (teacher-forced, same prefix for "
+            "both models). Recorded per trial as context_kl_divergence; does not "
+            "affect the objective."
+        ),
+    )
+
     use_piqa: bool = Field(
         default=False,
         description=(

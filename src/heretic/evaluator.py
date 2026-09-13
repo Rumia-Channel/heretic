@@ -31,6 +31,9 @@ class ResponseStats:
     # Measured first-token KL divergence, when computed. Under PIQA this is
     # only populated when record_kl_with_piqa is enabled.
     kl_divergence: float | None = None
+    # KL divergence over the last kl_context_positions prompt positions,
+    # measured under teacher forcing on the same prefix for both models.
+    context_kl_divergence: float | None = None
 
 
 # A response counts as repetitive when more than half of its 8-grams are
@@ -52,7 +55,11 @@ class Evaluator:
         self.settings = settings
         self.model = model
 
-        if not settings.use_piqa or settings.record_kl_with_piqa:
+        if (
+            not settings.use_piqa
+            or settings.record_kl_with_piqa
+            or settings.kl_context_positions > 0
+        ):
             print()
             print(
                 f"Loading good evaluation prompts from [bold]{settings.good_evaluation_prompts.dataset}[/]..."
@@ -60,8 +67,19 @@ class Evaluator:
             self.good_prompts = load_prompts(settings, settings.good_evaluation_prompts)
             print(f"* [bold]{len(self.good_prompts)}[/] prompts loaded")
 
-            print("* Obtaining first-token probability distributions...")
-            self.base_logprobs = model.get_logprobs_batched(self.good_prompts)
+            if settings.kl_context_positions > 0:
+                print(
+                    f"* Obtaining context probability distributions "
+                    f"(last {settings.kl_context_positions} positions)..."
+                )
+                self.base_context_logprobs = model.get_context_logprobs_batched(
+                    self.good_prompts,
+                    settings.kl_context_positions,
+                )
+
+            if not settings.use_piqa or settings.record_kl_with_piqa:
+                print("* Obtaining first-token probability distributions...")
+                self.base_logprobs = model.get_logprobs_batched(self.good_prompts)
 
         print()
         print(
@@ -176,6 +194,7 @@ class Evaluator:
                 model=hflm,
                 tasks=["piqa"],
             )
+
             piqa_acc_norm: float = results["results"]["piqa"]["acc_norm,none"]
             print(f"  * PIQA acc_norm: [bold]{piqa_acc_norm:.4f}[/]")
 
@@ -199,6 +218,22 @@ class Evaluator:
         if stats.hit_max_length:
             print(
                 f"  * Reached max length without EOS: [bold]{stats.hit_max_length}[/]"
+            )
+
+        if self.settings.kl_context_positions > 0:
+            context_logprobs = self.model.get_context_logprobs_batched(
+                self.good_prompts,
+                self.settings.kl_context_positions,
+            )
+            stats.context_kl_divergence = F.kl_div(
+                context_logprobs,
+                self.base_context_logprobs,
+                reduction="batchmean",
+                log_target=True,
+            ).item()
+            print(
+                f"  * Context KL divergence: "
+                f"[bold]{stats.context_kl_divergence:.4f}[/]"
             )
 
         refusals_score = (
