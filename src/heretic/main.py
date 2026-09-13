@@ -662,6 +662,7 @@ def run():
             trial.set_user_attr("piqa_acc_norm", -kl_divergence)
         trial.set_user_attr("refusals", stats.refusals)
         trial.set_user_attr("empty_responses", stats.empty)
+        trial.set_user_attr("repetitive_responses", stats.repetitive)
         trial.set_user_attr("max_length_responses", stats.hit_max_length)
 
         return score

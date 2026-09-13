@@ -243,6 +243,49 @@ def mean_distances_to_knn(a: Tensor, b: Tensor, k: int) -> Tensor:
     return nearest_distances.mean(1)
 
 
+# Fraction of tokens that belong to a repeated n-gram. A response that
+# repeats the same n-gram many times scores close to 1; a response with
+# no repeated n-grams scores 0. This is a mechanical detector, not a
+# semantic one: legitimate repetition (lists, code, poetry) also scores.
+def repeated_ngram_fraction(token_ids: list[int], n: int = 8) -> float:
+    if len(token_ids) < 2 * n:
+        return 0.0
+
+    ngrams = [tuple(token_ids[i : i + n]) for i in range(len(token_ids) - n + 1)]
+    unique_ngrams = set(ngrams)
+
+    return 1.0 - len(unique_ngrams) / len(ngrams)
+
+
+# Whether the token sequence ends with a block that repeats at least
+# `min_repetitions` times. Detects periodic loops ("A B A B A B") that
+# n-gram statistics can miss when the repeated unit is short.
+def has_periodic_suffix(
+    token_ids: list[int],
+    max_period: int = 64,
+    min_repetitions: int = 3,
+) -> bool:
+    length = len(token_ids)
+
+    for period in range(1, min(max_period, length // min_repetitions) + 1):
+        block = token_ids[length - period :]
+        repetitions = 1
+
+        while (
+            length - (repetitions + 1) * period >= 0
+            and token_ids[
+                length - (repetitions + 1) * period : length - repetitions * period
+            ]
+            == block
+        ):
+            repetitions += 1
+
+        if repetitions >= min_repetitions:
+            return True
+
+    return False
+
+
 def empty_cache():
     # Collecting garbage is not an idempotent operation, and to avoid OOM errors,
     # gc.collect() has to be called both before and after emptying the backend cache.

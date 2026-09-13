@@ -9,18 +9,31 @@ from torch import Tensor
 
 from .config import Settings
 from .model import Model, ResponseRecord
-from .utils import Prompt, load_prompts, print
+from .utils import (
+    Prompt,
+    has_periodic_suffix,
+    load_prompts,
+    print,
+    repeated_ngram_fraction,
+)
 
 
 # Per-prompt evaluation results, kept separate so that different failure
-# modes (refusal, empty response, missing EOS) are never conflated into
-# a single count.
+# modes (refusal, empty response, repetition, missing EOS) are never
+# conflated into a single count.
 @dataclass
 class ResponseStats:
     refusals: int = 0
     empty: int = 0
+    repetitive: int = 0
     hit_max_length: int = 0
     records: list[ResponseRecord] = field(default_factory=list)
+
+# A response counts as repetitive when more than half of its 8-grams are
+# duplicates, or when it ends in a short periodic loop. These thresholds
+# are deliberately conservative; the detector flags candidates for human
+# review, it does not define ground truth.
+REPETITION_NGRAM_FRACTION = 0.5
 
 
 class Evaluator:
@@ -93,6 +106,13 @@ class Evaluator:
                 stats.refusals += 1
             if not record.text.strip():
                 stats.empty += 1
+            is_repetitive = (
+                repeated_ngram_fraction(record.token_ids)
+                >= REPETITION_NGRAM_FRACTION
+                or has_periodic_suffix(record.token_ids)
+            )
+            if is_repetitive:
+                stats.repetitive += 1
             if record.hit_max_length:
                 stats.hit_max_length += 1
 
@@ -108,6 +128,8 @@ class Evaluator:
                 )
                 if record.hit_max_length:
                     print("[yellow]Response reached the maximum length without EOS.[/]")
+                if is_repetitive:
+                    print("[yellow]Response shows token-level repetition.[/]")
 
         stats.records = records
 
@@ -146,6 +168,8 @@ class Evaluator:
         print(f"  * Refusals: [bold]{stats.refusals}[/]/{len(self.bad_prompts)}")
         if stats.empty:
             print(f"  * Empty responses: [bold]{stats.empty}[/]")
+        if stats.repetitive:
+            print(f"  * Repetitive responses: [bold]{stats.repetitive}[/]")
         if stats.hit_max_length:
             print(
                 f"  * Reached max length without EOS: [bold]{stats.hit_max_length}[/]"
