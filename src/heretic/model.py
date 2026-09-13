@@ -660,6 +660,10 @@ class Model:
                             + parameters.steer_bad_behavior_weight * steer_bad_behavior
                         )
 
+                    # Snapshot the original weights so they can be restored if
+                    # the optimization diverges (non-finite loss or weights).
+                    original_matrix = matrix.detach().clone()
+
                     optimizer = LBFGS(
                         [matrix],
                         lr=1.0,
@@ -675,11 +679,15 @@ class Model:
                         return loss
 
                     # Convergence usually happens within 2-3 steps, so this is more than enough.
+                    diverged = False
                     for step in range(5):
                         loss = optimizer.step(closure)
-                        # print(
-                        #    f"\\[{layer_index}/{component}/{module_index}] Step: {step}, Loss: {loss.item():.6f}"
-                        # )
+                        if loss is not None and not math.isfinite(loss.item()):
+                            diverged = True
+                            break
+                        if not torch.isfinite(matrix).all():
+                            diverged = True
+                            break
 
                     # Free the gradient buffers accumulated on the weight parameters
                     # during optimization. Without this, they persist on the model
@@ -689,7 +697,14 @@ class Model:
                     optimizer.zero_grad(set_to_none=True)
 
                     with torch.no_grad():
-                        matrix.copy_(get_matrix())
+                        if diverged:
+                            matrix.copy_(original_matrix)
+                        else:
+                            final_matrix = get_matrix()
+                            if torch.isfinite(final_matrix).all():
+                                matrix.copy_(final_matrix)
+                            else:
+                                matrix.copy_(original_matrix)
 
     def ara_lora_abliterate(
         self,
@@ -796,6 +811,11 @@ class Model:
 
                     # Optimization loop.
                     # We optimize A and B, not the base matrix.
+                    # Snapshot the original adapter weights so they can be
+                    # restored if the optimization diverges.
+                    original_A = lora_A.detach().clone()
+                    original_B = lora_B.detach().clone()
+
                     optimizer = LBFGS(
                         [lora_A, lora_B],
                         lr=1.0,
@@ -812,12 +832,27 @@ class Model:
                         return loss
 
                     # Run optimization steps.
+                    diverged = False
                     for step in range(5):
-                        optimizer.step(closure)
+                        loss = optimizer.step(closure)
+                        if loss is not None and not math.isfinite(loss.item()):
+                            diverged = True
+                            break
+                        if not (
+                            torch.isfinite(lora_A).all()
+                            and torch.isfinite(lora_B).all()
+                        ):
+                            diverged = True
+                            break
 
                     # Free the gradient buffers accumulated on the LoRA adapter
                     # parameters during optimization (see ara_abliterate for details).
                     optimizer.zero_grad(set_to_none=True)
+
+                    if diverged:
+                        with torch.no_grad():
+                            lora_A.copy_(original_A)
+                            lora_B.copy_(original_B)
 
     def generate(
         self,
