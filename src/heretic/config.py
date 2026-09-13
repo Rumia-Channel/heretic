@@ -4,7 +4,7 @@
 from enum import Enum
 from typing import Dict
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import (
     BaseSettings,
     CliSettingsSource,
@@ -421,6 +421,24 @@ class Settings(BaseSettings):
         ),
         description="Dataset of prompts that tend to result in refusals (used for evaluating model performance).",
     )
+
+    @model_validator(mode="after")
+    def check_ara_quantization_compatibility(self):
+        # Full-weight ARA optimizes the weight matrices directly with L-BFGS,
+        # which requires trainable parameters. 4-bit quantized weights cannot
+        # be optimized in place; the ARA-LoRA path exists for that case.
+        if (
+            self.use_ara
+            and not self.use_ara_lora
+            and self.quantization == QuantizationMethod.BNB_4BIT
+        ):
+            raise ValueError(
+                "Full-weight ARA (use_ara without use_ara_lora) is incompatible "
+                "with bnb_4bit quantization, because quantized weights cannot "
+                "be optimized in place. Enable use_ara_lora or disable "
+                "quantization."
+            )
+        return self
 
     @classmethod
     def settings_customise_sources(
