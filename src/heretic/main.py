@@ -670,6 +670,12 @@ def run():
             trial.set_user_attr(
                 "context_kl_divergence", stats.context_kl_divergence
             )
+        if model.ara_losses:
+            trial.set_user_attr(
+                "ara_loss_mean",
+                sum(model.ara_losses) / len(model.ara_losses),
+            )
+            trial.set_user_attr("ara_loss_max", max(model.ara_losses))
 
         return score
 

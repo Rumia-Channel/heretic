@@ -92,6 +92,9 @@ class Model:
         self.settings = settings
         self.response_prefix = ""
         self.needs_reload = False
+        # Final L-BFGS loss per optimized module, populated by the ARA
+        # abliteration methods for diagnostics.
+        self.ara_losses: list[float] = []
 
         print()
         print(f"Loading model [bold]{settings.model}[/]...")
@@ -593,6 +596,8 @@ class Model:
         bad_module_io: ModuleIO,
         parameters: ARAParameters,
     ):
+        self.ara_losses = []
+
         for layer_index in range(
             parameters.start_layer_index,
             parameters.end_layer_index,
@@ -692,14 +697,20 @@ class Model:
 
                     # Convergence usually happens within 2-3 steps, so this is more than enough.
                     diverged = False
+                    last_loss: float | None = None
                     for step in range(5):
                         loss = optimizer.step(closure)
-                        if loss is not None and not math.isfinite(loss.item()):
-                            diverged = True
-                            break
+                        if loss is not None:
+                            last_loss = loss.item()
+                            if not math.isfinite(last_loss):
+                                diverged = True
+                                break
                         if not torch.isfinite(matrix).all():
                             diverged = True
                             break
+
+                    if last_loss is not None and math.isfinite(last_loss):
+                        self.ara_losses.append(last_loss)
 
                     # Free the gradient buffers accumulated on the weight parameters
                     # during optimization. Without this, they persist on the model
@@ -724,6 +735,8 @@ class Model:
         bad_module_io: ModuleIO,
         parameters: ARAParameters,
     ):
+        self.ara_losses = []
+
         for layer_index in range(
             parameters.start_layer_index,
             parameters.end_layer_index,
@@ -851,17 +864,23 @@ class Model:
 
                     # Run optimization steps.
                     diverged = False
+                    last_loss: float | None = None
                     for step in range(5):
                         loss = optimizer.step(closure)
-                        if loss is not None and not math.isfinite(loss.item()):
-                            diverged = True
-                            break
+                        if loss is not None:
+                            last_loss = loss.item()
+                            if not math.isfinite(last_loss):
+                                diverged = True
+                                break
                         if not (
                             torch.isfinite(opt_A).all()
                             and torch.isfinite(opt_B).all()
                         ):
                             diverged = True
                             break
+
+                    if last_loss is not None and math.isfinite(last_loss):
+                        self.ara_losses.append(last_loss)
 
                     # Free the gradient buffers accumulated on the shadow
                     # parameters during optimization (see ara_abliterate for
