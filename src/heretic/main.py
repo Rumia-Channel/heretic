@@ -45,6 +45,7 @@ from optuna.storages import JournalStorage
 from optuna.storages.journal import JournalFileBackend, JournalFileOpenLock
 from optuna.study import StudyDirection
 from optuna.trial import TrialState
+from peft import PeftModel
 from pydantic import ValidationError
 from questionary import Choice, Style
 from rich.table import Table
@@ -884,10 +885,14 @@ def run():
                                 print("Saving LoRA adapter...")
                                 model.model.save_pretrained(save_directory)
                             else:
-                                if settings.use_ara:
+                                if settings.use_ara and not settings.use_ara_lora:
+                                    # Full-weight ARA modifies the base weights directly,
+                                    # so there is nothing to merge.
                                     print("Saving model...")
                                     merged_model = model.model
                                 else:
+                                    # Directional abliteration and ARA-LoRA both store
+                                    # their changes in LoRA adapters that must be merged.
                                     print("Saving merged model...")
                                     merged_model = model.get_merged_model()
                                 merged_model.save_pretrained(save_directory)
@@ -943,7 +948,8 @@ def run():
                                     token=token,
                                 )
                             else:
-                                if settings.use_ara:
+                                if settings.use_ara and not settings.use_ara_lora:
+                                    # See the save path above for why this check is needed.
                                     print("Uploading model...")
                                     merged_model = model.model
                                 else:
@@ -1066,6 +1072,18 @@ def run():
                             if scope is None:
                                 continue
                             benchmark_original_model = scope == "Benchmark both models"
+
+                            # Full-weight ARA modifies the base weights in place, so there
+                            # is no adapter to disable and the original model cannot be
+                            # recovered without a reload.
+                            if benchmark_original_model and not isinstance(
+                                model.model, PeftModel
+                            ):
+                                print(
+                                    "[yellow]Original model comparison is not available for "
+                                    "full-weight ARA (no adapter to disable).[/]"
+                                )
+                                benchmark_original_model = False
 
                             hflm = HFLM(
                                 pretrained=model.model,  # ty:ignore[invalid-argument-type]
