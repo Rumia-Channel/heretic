@@ -244,6 +244,15 @@ class Settings(BaseSettings):
         ),
     )
 
+    evaluation_log_path: str | None = Field(
+        default=None,
+        description=(
+            "If set, append every evaluated response to this JSONL file, including "
+            "the prompt, raw response text, stop reason, and matched refusal markers. "
+            "Enables re-scoring the same generations with updated criteria."
+        ),
+    )
+
     use_piqa: bool = Field(
         default=False,
         description=(

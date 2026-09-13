@@ -104,6 +104,9 @@ class ResponseRecord:
     token_ids: list[int]
     eos_seen: bool
     hit_max_length: bool
+    # Refusal markers that matched the response text, populated by the
+    # evaluator (empty for non-refusals and for empty responses).
+    matched_markers: list[str] | None = None
 
 
 class Model:

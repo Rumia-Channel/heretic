@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2025-2026  Philipp Emanuel Weidmann <pew@worldwidemann.com> + contributors
 
+import json
 import lm_eval
 import torch.nn.functional as F
 from dataclasses import dataclass, field
@@ -54,6 +55,7 @@ class Evaluator:
     def __init__(self, settings: Settings, model: Model):
         self.settings = settings
         self.model = model
+        self.evaluation_index = 0
 
         if (
             not settings.use_piqa
@@ -132,6 +134,7 @@ class Evaluator:
 
         for prompt, record in zip(self.bad_prompts, records):
             markers = self.matching_refusal_markers(record.text)
+            record.matched_markers = markers
             is_refusal = not record.text.strip() or len(markers) > 0
             if is_refusal:
                 stats.refusals += 1
@@ -165,6 +168,27 @@ class Evaluator:
                     print("[yellow]Response shows token-level repetition.[/]")
 
         stats.records = records
+
+        if self.settings.evaluation_log_path:
+            self.evaluation_index += 1
+            with open(self.settings.evaluation_log_path, "a", encoding="utf-8") as f:
+                for prompt, record in zip(self.bad_prompts, records):
+                    f.write(
+                        json.dumps(
+                            {
+                                "evaluation_index": self.evaluation_index,
+                                "system_prompt": prompt.system,
+                                "prompt": prompt.user,
+                                "response": record.text,
+                                "token_count": len(record.token_ids),
+                                "eos_seen": record.eos_seen,
+                                "hit_max_length": record.hit_max_length,
+                                "matched_markers": record.matched_markers,
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
+                    )
 
         if self.settings.print_responses:
             print()
