@@ -30,9 +30,20 @@ from transformers import (
 from transformers.generation import (
     GenerateDecoderOnlyOutput,  # ty:ignore[possibly-missing-import]
 )
+from transformers.generation.stopping_criteria import (
+    StoppingCriteria,
+    StoppingCriteriaList,
+)
 
 from .config import QuantizationMethod, RowNormalization, Settings
-from .utils import Prompt, batchify, empty_cache, mean_distances_to_knn, print
+from .utils import (
+    Prompt,
+    batchify,
+    empty_cache,
+    has_periodic_suffix,
+    mean_distances_to_knn,
+    print,
+)
 
 
 def get_model_class(
@@ -44,6 +55,18 @@ def get_model_class(
         return AutoModelForImageTextToText
     else:
         return AutoModelForCausalLM
+
+
+# Stops generation when the output ends in a short periodic loop. This is
+# an operational safeguard for interactive use, not an evaluation metric:
+# it prevents unbounded repetition from consuming the full token budget.
+class RepetitionStoppingCriteria(StoppingCriteria):
+    def __init__(self, prompt_length: int):
+        self.prompt_length = prompt_length
+
+    def __call__(self, input_ids: LongTensor, scores: Tensor, **kwargs: Any) -> bool:
+        generated = input_ids[0, self.prompt_length :].tolist()
+        return has_periodic_suffix(generated)
 
 
 @dataclass
@@ -1345,20 +1368,34 @@ class Model:
             skip_special_tokens=True,
         )
 
+        stopping_criteria = StoppingCriteriaList(
+            [RepetitionStoppingCriteria(inputs["input_ids"].shape[1])]
+        )
+
         # FIXME: The type checker has been disabled here because of the extremely complex
         #        interplay between different generate() signatures and dynamic delegation.
         outputs = self.model.generate(
             **inputs,
             streamer=streamer,
             max_new_tokens=4096,
+            stopping_criteria=stopping_criteria,
         )  # ty:ignore[call-non-callable]
+
+        generated_ids = outputs[0, inputs["input_ids"].shape[1] :]
+
+        if has_periodic_suffix(generated_ids.tolist()):
+            print()
+            print(
+                "[yellow]Generation stopped early: the output ended in a "
+                "repeating token loop.[/]"
+            )
 
         # This cast is valid because str is the return type
         # when passing a sequence of token IDs.
         return cast(
             str,
             self.tokenizer.decode(
-                outputs[0, inputs["input_ids"].shape[1] :],
+                generated_ids,
                 skip_special_tokens=True,
             ),
         )
