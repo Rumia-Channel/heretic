@@ -94,6 +94,57 @@ class ARAParameters:
 ModuleIO: TypeAlias = list[dict[str, dict[int, tuple[Tensor, Tensor]]]]
 
 
+# Maps each abliterable component name to the attribute paths (relative to a
+# decoder layer) that hold the corresponding modules across supported
+# architectures. A "*" segment expands ModuleList-like containers such as
+# MoE expert lists. Settings.module_paths can add or replace entries without
+# code changes, which is how new architectures are supported.
+DEFAULT_MODULE_PATHS: dict[str, list[str]] = {
+    "attn.o_proj": [
+        # Standard self-attention out-projection (most models).
+        "self_attn.o_proj",
+        # Qwen3.5 MoE hybrid layers use GatedDeltaNet (linear attention)
+        # instead of standard self-attention.
+        "linear_attn.out_proj",
+    ],
+    "mlp.down_proj": [
+        # Most dense models.
+        "mlp.down_proj",
+        # Some MoE models (e.g. Qwen3).
+        "mlp.experts.*.down_proj",
+        # Phi-3.5-MoE (and possibly others).
+        "block_sparse_moe.experts.*.w2",
+        # Granite MoE Hybrid - attention layers with shared_mlp.
+        "shared_mlp.output_linear",
+        # Granite MoE Hybrid - MoE layers with experts.
+        "moe.experts.*.output_linear",
+    ],
+}
+
+
+# Resolves a dotted attribute path against a layer, expanding "*"
+# segments over ModuleList-like containers. Returns every module found;
+# missing attributes and non-module values are skipped.
+def _resolve_module_path(layer: Module, path: str) -> list[Module]:
+    objects: list[Any] = [layer]
+
+    for segment in path.split("."):
+        next_objects: list[Any] = []
+
+        for obj in objects:
+            if segment == "*":
+                if isinstance(obj, (ModuleList, list, tuple)):
+                    next_objects.extend(obj)
+            else:
+                child = getattr(obj, segment, None)
+                if child is not None:
+                    next_objects.append(child)
+
+        objects = next_objects
+
+    return [obj for obj in objects if isinstance(obj, Module)]
+
+
 # A single generated response together with metadata about how it ended.
 # token_ids is truncated at the first EOS token, so it contains only the
 # tokens the model actually produced (batched generation pads finished
@@ -410,54 +461,22 @@ class Model:
     def get_layer_modules(self, layer_index: int) -> dict[str, list[Module]]:
         layer = self.get_layers()[layer_index]
 
-        modules = {}
+        # User-provided paths extend or replace the built-in defaults, so new
+        # architectures can be supported through configuration alone.
+        module_paths = {**DEFAULT_MODULE_PATHS, **self.settings.module_paths}
 
-        def try_add(component: str, module: Any):
+        modules: dict[str, list[Module]] = {}
+
+        for component, paths in module_paths.items():
             if component not in self.settings.target_components:
-                return
+                continue
 
-            # Only add if it's a proper nn.Module (PEFT can wrap these with LoRA)
-            if isinstance(module, Module):
-                if component not in modules:
-                    modules[component] = []
-                modules[component].append(module)
-            else:
-                # Assert for unexpected types (catches architecture changes)
-                assert not isinstance(module, Tensor), (
-                    f"Unexpected Tensor in {component} - expected nn.Module"
-                )
-
-        # Standard self-attention out-projection (most models).
-        with suppress(Exception):
-            try_add("attn.o_proj", layer.self_attn.o_proj)  # ty:ignore[possibly-missing-attribute]
-
-        # Qwen3.5 MoE hybrid layers use GatedDeltaNet (linear attention) instead
-        # of standard self-attention, so self_attn.o_proj doesn't exist on those layers.
-        with suppress(Exception):
-            try_add("attn.o_proj", layer.linear_attn.out_proj)  # ty:ignore[possibly-missing-attribute]
-
-        # Most dense models.
-        with suppress(Exception):
-            try_add("mlp.down_proj", layer.mlp.down_proj)  # ty:ignore[possibly-missing-attribute]
-
-        # Some MoE models (e.g. Qwen3).
-        with suppress(Exception):
-            for expert in layer.mlp.experts:  # ty:ignore[possibly-missing-attribute, not-iterable]
-                try_add("mlp.down_proj", expert.down_proj)  # ty:ignore[possibly-missing-attribute]
-
-        # Phi-3.5-MoE (and possibly others).
-        with suppress(Exception):
-            for expert in layer.block_sparse_moe.experts:  # ty:ignore[possibly-missing-attribute, not-iterable]
-                try_add("mlp.down_proj", expert.w2)  # ty:ignore[possibly-missing-attribute]
-
-        # Granite MoE Hybrid - attention layers with shared_mlp.
-        with suppress(Exception):
-            try_add("mlp.down_proj", layer.shared_mlp.output_linear)  # ty:ignore[possibly-missing-attribute]
-
-        # Granite MoE Hybrid - MoE layers with experts.
-        with suppress(Exception):
-            for expert in layer.moe.experts:  # ty:ignore[possibly-missing-attribute, not-iterable]
-                try_add("mlp.down_proj", expert.output_linear)  # ty:ignore[possibly-missing-attribute]
+            for path in paths:
+                for module in _resolve_module_path(layer, path):
+                    # The same module can be reachable through multiple paths
+                    # (e.g. a shared MLP referenced from two attributes).
+                    if module not in modules.setdefault(component, []):
+                        modules[component].append(module)
 
         # We need at least one module across all components for abliteration to work.
         total_modules = sum(len(mods) for mods in modules.values())

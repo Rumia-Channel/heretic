@@ -206,6 +206,17 @@ class Settings(BaseSettings):
         ),
     )
 
+    module_paths: Dict[str, list[str]] = Field(
+        default={},
+        description=(
+            "Overrides or extends the built-in map from component names to module "
+            "attribute paths within each decoder layer. A '*' segment expands "
+            "ModuleList-like containers (e.g. MoE expert lists). Example: "
+            '{"mlp.down_proj": ["mlp.experts.*.down_proj"]} replaces the default '
+            "paths for that component."
+        ),
+    )
+
     use_ara: bool = Field(
         default=True,
         description=(
