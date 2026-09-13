@@ -271,7 +271,148 @@ greedy decoding でも、ハードウェアや数値計算の違いをまたい�
 
 まず評価器の妥当性を確かめ、その後にモデル間の差を解釈する。この順序により、「拒否表現がない」「反復が短くなった」「採点器の点数が高い」といった観測を、実際の要求達成と取り違えることを減らせる。
 
-## 8. 参照先と調査範囲
+## 8. 数式による定義：品質監査器の検証
+
+本節の関数は、通常用途のデータにおける監査器の信頼性と比較結果を測るための設計案である。ARA の更新・探索に与える損失や報酬ではない。単一の合成点にまとめず、測定対象と分母を明示した関数として扱う。
+
+### 8.1 データと記号
+
+人手で確認した監査データを次のように表す。
+
+$$
+\mathcal{D}=\{(x_i,y_i,z_i,\hat z_i)\}_{i=1}^{N}
+$$
+
+ここで、`x_i` は課題と必要な文脈、`y_i` は応答、`z_i` は人手ラベル、`hat z_i` は監査器の出力である。ラベルは、例えば通常用途での反復の有無など、一つの性質ごとに定義する。複数の性質を一つの正解ラベルに混ぜない。
+
+以下では `z_i ∈ {0,1}` とし、1 を検出対象の品質不良とする。監査器は判定保留 `⊥` を返せるものとする。人手でも判断できない例はこの二値集計の外に置き、その件数を別に報告する。
+
+### 8.2 誤検出と見逃しを測る関数
+
+判定した例の集合を `S = {i : hat z_i ≠ ⊥}` とする。各件数を次で定義する。
+
+$$
+\begin{aligned}
+TP &= \sum_{i\in S}\mathbf{1}[z_i=1\land\hat z_i=1],\\
+FP &= \sum_{i\in S}\mathbf{1}[z_i=0\land\hat z_i=1],\\
+TN &= \sum_{i\in S}\mathbf{1}[z_i=0\land\hat z_i=0],\\
+FN &= \sum_{i\in S}\mathbf{1}[z_i=1\land\hat z_i=0].
+\end{aligned}
+$$
+
+$$
+\operatorname{Precision}=\frac{TP}{TP+FP},\qquad
+\operatorname{Recall}_{S}=\frac{TP}{TP+FN},\qquad
+\operatorname{FPR}_{S}=\frac{FP}{FP+TN}.
+$$
+
+添字 S は「判定した範囲での値」であることを示す。分母がゼロなら値は未定義として保存し、便宜的に 0 や 1 に置き換えない。
+
+判定保留に難しい例を集めれば、これらの数値だけは改善できる。したがって、次の判定率も必ず併記する。
+
+$$
+\operatorname{DecisionCoverage}=\frac{|S|}{N},\qquad
+\operatorname{PositiveCoverage}=
+\frac{\sum_{i\in S}\mathbf{1}[z_i=1]}
+{\sum_{i=1}^{N}\mathbf{1}[z_i=1]}.
+$$
+
+この coverage は「監査器が判定した割合」であり、第7章の要求充足率とは異なる。全人手陽性例のうち自動的に検出できた割合も別に記録する。
+
+$$
+\operatorname{DetectionYield}=
+\frac{TP}{\sum_{i=1}^{N}\mathbf{1}[z_i=1]}.
+$$
+
+判定保留を陰性と偽って記録せず、未解決分を含めた実際の検出範囲を示せる。
+
+### 8.3 確率出力の検証
+
+監査器が品質不良の確率として `p_i ∈ [0,1]` を出力する場合、固定した検証データ上で Brier score を計算できる。
+
+$$
+\operatorname{BS}=\frac{1}{N}\sum_{i=1}^{N}(p_i-z_i)^2.
+$$
+
+これは確率予測の誤差を測るもので、応答自体の品質点ではない。また、較正だけを純粋に測る指標でもない。品質不良の少ないデータでは、常に低確率を返すだけでも小さくなりうるため、クラス比率と定数予測の結果を併記する。
+
+確率帯ごとの一致も確認する。あらかじめ定めた確率帯に属する例の集合を `B_b` とすると、
+
+$$
+\bar p_b=\frac{1}{|B_b|}\sum_{i\in B_b}p_i,\qquad
+\bar z_b=\frac{1}{|B_b|}\sum_{i\in B_b}z_i.
+$$
+
+各帯で平均予測確率と実際の陽性率を、件数とともに示す。空の帯は計算しない。モデルの自己申告値が高いことと、実際に正しいことは別である。
+
+### 8.4 判定保留を含む誤りの表示
+
+人手データで意味を検証した確かさの値を `q_i`、判定を採用する境界を `τ` とし、`S_τ = {i : q_i ≥ τ}` とする。
+
+$$
+C(\tau)=\frac{|S_\tau|}{N},\qquad
+R(\tau)=\frac{1}{|S_\tau|}
+\sum_{i\in S_\tau}\mathbf{1}[\hat z_i\ne z_i].
+$$
+
+`C` は判定率、`R` は判定した範囲での誤り率である。二つを組として報告する。`S_τ` が空なら `R` は未定義となる。この表示は監査器の検証用であり、生成モデルの目的関数ではない。
+
+### 8.5 基準モデルとの対応付き比較
+
+課題 i における通常用途の監査項目の測定値を、対象モデルについて `m_i^A`、基準モデルについて `m_i^B` とする。値の方向は項目ごとに明示する。例えば反復発生なら大きいほど悪い。
+
+$$
+d_i=m_i^A-m_i^B,\qquad
+\widehat{\Delta}=\frac{1}{N}\sum_{i=1}^{N}d_i.
+$$
+
+同一課題を対応付けることで、課題構成の差を混ぜずに比較する。同じ課題から複数生成した場合は課題内の平均を先に求め、課題数を母数とする。片方が欠損した課題は対応付き比較に使えないため、除外数と理由を示す。
+
+この差は因果効果の証明ではない。生成設定、量子化、テンプレートなどに差があれば、その差も結果に含まれる。区間推定には課題単位の再標本化などを用い、同じ課題の生成を独立標本として扱わない。
+
+### 8.6 停止機能の評価関数
+
+人手確認した完了済み記録に対するオフライン検査では、品質不良の有無を `z_i`、停止検出器が発火したかを `a_i ∈ {0,1}` として、次の二つを分けて計算する。
+
+$$
+\operatorname{FalseStopRate}=
+\frac{\sum_i\mathbf{1}[z_i=0\land a_i=1]}
+{\sum_i\mathbf{1}[z_i=0]},\qquad
+\operatorname{DetectionRate}=
+\frac{\sum_i\mathbf{1}[z_i=1\land a_i=1]}
+{\sum_i\mathbf{1}[z_i=1]}.
+$$
+
+前者は正常回答を止めてしまう割合、後者は品質不良を検出できた割合である。判定には必要な文脈を含め、正常な反復を品質不良にしない。
+
+オンラインで停止した記録では、その後に自然終了したかどうかは観測できない。このため、停止済み応答だけを使って上式の正解ラベルを作ると循環した評価になる。完了済み記録による検証と、実運用での停止件数・コストの報告を分ける。
+
+### 8.7 関数としてのインターフェース案
+
+次は実行コードではなく、監査モジュールの入出力契約である。
+
+```text
+evaluate_detector(human_labels, predictions)
+  -> confusion_counts, precision, recall_decided,
+     false_positive_rate_decided, decision_coverage,
+     positive_coverage, detection_yield
+
+evaluate_probability_forecasts(human_labels, probabilities)
+  -> brier_score, prevalence, calibration_bins
+
+compare_paired_cases(baseline_records, candidate_records, metric)
+  -> per_case_differences, mean_difference, paired_count,
+     missing_cases, uncertainty_summary
+
+evaluate_stop_detector(completed_records, human_labels, detections)
+  -> false_stop_rate, detection_rate, denominators
+```
+
+すべての関数は、未定義値とその理由、使用した母数を返す。課題識別子の重複、入力件数の不一致、ラベル範囲外、非有限の確率値は黙って補正せず、入力エラーとして扱う。
+
+関数の検証には、全陽性・全陰性・全保留・空入力・欠損した対照・同一課題の複数生成を含める。特に「判定を全部保留すると高性能になる」「分母ゼロが満点になる」という誤った集計を防ぐ必要がある。
+
+## 9. 参照先と調査範囲
 
 - [ARA の原提案：Heretic PR #211](https://github.com/p-e-w/heretic/pull/211)
 - [一般的な生成退化の研究：Holtzman ほか](https://arxiv.org/abs/1904.09751)
