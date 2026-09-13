@@ -700,6 +700,15 @@ def run():
     )
 
     study.set_user_attr("settings", settings.model_dump_json())
+    study.set_user_attr(
+        "environment",
+        {
+            "model_revision": getattr(model.model.config, "_commit_hash", None),
+            "transformers": transformers.__version__,
+            "torch": torch.__version__,
+            "heretic": version("heretic-llm"),
+        },
+    )
     study.set_user_attr("finished", False)
 
     def count_completed_trials() -> int:
