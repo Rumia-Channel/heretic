@@ -188,6 +188,16 @@ class Settings(BaseSettings):
         ),
     )
 
+    smooth_kl_objective: bool = Field(
+        default=False,
+        description=(
+            "Use a continuous KL objective: max(kl_divergence, refusals * kl_divergence_target) "
+            "instead of switching to a refusal-based value below the target. "
+            "This removes the discontinuity at kl_divergence_target while still "
+            "preventing parameter combinations that do nothing."
+        ),
+    )
+
     target_components: list[str] = Field(
         default=["attn.o_proj", "mlp.down_proj"],
         description=(

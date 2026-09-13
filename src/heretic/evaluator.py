@@ -203,7 +203,16 @@ class Evaluator:
             kl_divergence_scale = self.settings.kl_divergence_scale
             kl_divergence_target = self.settings.kl_divergence_target
 
-            if kl_divergence >= kl_divergence_target:
+            if self.settings.smooth_kl_objective:
+                # Continuous variant: the refusal-scaled target acts as a floor,
+                # so the objective keeps tracking the measured KL divergence
+                # on both sides of the target instead of jumping between
+                # two unrelated expressions.
+                kld_score = (
+                    max(kl_divergence, refusals_score * kl_divergence_target)
+                    / kl_divergence_scale
+                )
+            elif kl_divergence >= kl_divergence_target:
                 kld_score = kl_divergence / kl_divergence_scale
             else:
                 kld_score = refusals_score * kl_divergence_target / kl_divergence_scale
