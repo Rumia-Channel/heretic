@@ -656,8 +656,12 @@ def run():
                 f"[grey50]Estimated remaining time: [bold]{format_duration(remaining_time)}[/][/]"
             )
         print_memory_usage()
-
+        # Under PIQA, get_score() returns -acc_norm in the kl_divergence slot.
+        # Keep it there for Pareto-sort compatibility with existing studies,
+        # but also record the actual metric under its own name.
         trial.set_user_attr("kl_divergence", kl_divergence)
+        if settings.use_piqa:
+            trial.set_user_attr("piqa_acc_norm", -kl_divergence)
         trial.set_user_attr("refusals", refusals)
 
         return score
