@@ -601,12 +601,22 @@ class Model:
                         else:
                             return matrix
 
-                    good_input, good_output = good_module_io[layer_index][component][
-                        module_index
-                    ]
-                    bad_input, bad_output = bad_module_io[layer_index][component][
-                        module_index
-                    ]
+                    # Modules that were never invoked for the collected prompts
+                    # (e.g. MoE experts that no prompt routed to) have empty
+                    # or missing I/O tensors. Optimizing them would produce
+                    # NaN losses, so skip them.
+                    good_io = good_module_io[layer_index][component].get(module_index)
+                    bad_io = bad_module_io[layer_index][component].get(module_index)
+                    if (
+                        good_io is None
+                        or bad_io is None
+                        or good_io[0].numel() == 0
+                        or bad_io[0].numel() == 0
+                    ):
+                        continue
+
+                    good_input, good_output = good_io
+                    bad_input, bad_output = bad_io
 
                     good_input = good_input.to(matrix.device)
                     good_output = good_output.to(matrix.device)
@@ -725,8 +735,20 @@ class Model:
 
                     # Data preparation.
                     # Move I/O tensors to the device of the adapter weights.
-                    good_input, good_output = good_module_io[layer_index][component][module_index]
-                    bad_input, bad_output = bad_module_io[layer_index][component][module_index]
+                    # Skip modules that were never invoked for the collected
+                    # prompts (e.g. unrouted MoE experts) to avoid NaN losses.
+                    good_io = good_module_io[layer_index][component].get(module_index)
+                    bad_io = bad_module_io[layer_index][component].get(module_index)
+                    if (
+                        good_io is None
+                        or bad_io is None
+                        or good_io[0].numel() == 0
+                        or bad_io[0].numel() == 0
+                    ):
+                        continue
+
+                    good_input, good_output = good_io
+                    bad_input, bad_output = bad_io
 
                     good_input = good_input.float().to(lora_A.device)
                     good_output = good_output.float().to(lora_A.device)
