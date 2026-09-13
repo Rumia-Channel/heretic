@@ -674,6 +674,13 @@ class Model:
                             matrix.data.copy_(original_matrix)
                             break
 
+                    # Free the gradient buffers accumulated on the weight parameters
+                    # during optimization. Without this, they persist on the model
+                    # (one full-size gradient per processed weight) and can easily
+                    # consume tens of GiB of VRAM, causing out-of-memory errors
+                    # during the subsequent evaluation.
+                    optimizer.zero_grad(set_to_none=True)
+
                     with torch.no_grad():
                         result = get_matrix()
                         if torch.isnan(result).any() or torch.isinf(result).any():
@@ -811,6 +818,10 @@ class Model:
                             lora_A.data.copy_(original_lora_A)
                             lora_B.data.copy_(original_lora_B)
                             break
+
+                    # Free the gradient buffers accumulated on the LoRA adapter
+                    # parameters during optimization (see ara_abliterate for details).
+                    optimizer.zero_grad(set_to_none=True)
 
     def generate(
         self,
