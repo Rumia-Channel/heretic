@@ -664,6 +664,8 @@ def run():
         trial.set_user_attr("empty_responses", stats.empty)
         trial.set_user_attr("repetitive_responses", stats.repetitive)
         trial.set_user_attr("max_length_responses", stats.hit_max_length)
+        if stats.kl_divergence is not None:
+            trial.set_user_attr("measured_kl_divergence", stats.kl_divergence)
 
         return score
 

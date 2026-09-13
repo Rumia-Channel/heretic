@@ -226,6 +226,14 @@ class Settings(BaseSettings):
         description="If LoRA is used in ARA, this sets up its rank. Keep it high enough to simulate the 'arbitrary' effect.",
     )
 
+    record_kl_with_piqa: bool = Field(
+        default=False,
+        description=(
+            "Also measure the first-token KL divergence when use_piqa is enabled. "
+            "The KL value is recorded on each trial but does not affect the objective."
+        ),
+    )
+
     use_piqa: bool = Field(
         default=False,
         description=(

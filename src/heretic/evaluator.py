@@ -28,6 +28,10 @@ class ResponseStats:
     repetitive: int = 0
     hit_max_length: int = 0
     records: list[ResponseRecord] = field(default_factory=list)
+    # Measured first-token KL divergence, when computed. Under PIQA this is
+    # only populated when record_kl_with_piqa is enabled.
+    kl_divergence: float | None = None
+
 
 # A response counts as repetitive when more than half of its 8-grams are
 # duplicates, or when it ends in a short periodic loop. These thresholds
@@ -48,7 +52,7 @@ class Evaluator:
         self.settings = settings
         self.model = model
 
-        if not settings.use_piqa:
+        if not settings.use_piqa or settings.record_kl_with_piqa:
             print()
             print(
                 f"Loading good evaluation prompts from [bold]{settings.good_evaluation_prompts.dataset}[/]..."
@@ -149,7 +153,18 @@ class Evaluator:
 
         return stats
 
+    def measure_kl_divergence(self) -> float:
+        logprobs = self.model.get_logprobs_batched(self.good_prompts)
+        return F.kl_div(
+            logprobs,
+            self.base_logprobs,
+            reduction="batchmean",
+            log_target=True,
+        ).item()
+
     def get_score(self) -> tuple[tuple[float, float], float, ResponseStats]:
+        kl_divergence: float | None = None
+
         if self.settings.use_piqa:
             print("  * Running PIQA benchmark...")
             hflm = HFLM(
@@ -163,19 +178,19 @@ class Evaluator:
             )
             piqa_acc_norm: float = results["results"]["piqa"]["acc_norm,none"]
             print(f"  * PIQA acc_norm: [bold]{piqa_acc_norm:.4f}[/]")
+
+            if self.settings.record_kl_with_piqa:
+                print("  * Obtaining first-token probability distributions...")
+                kl_divergence = self.measure_kl_divergence()
+                print(f"  * KL divergence: [bold]{kl_divergence:.4f}[/]")
         else:
             print("  * Obtaining first-token probability distributions...")
-            logprobs = self.model.get_logprobs_batched(self.good_prompts)
-            kl_divergence = F.kl_div(
-                logprobs,
-                self.base_logprobs,
-                reduction="batchmean",
-                log_target=True,
-            ).item()
+            kl_divergence = self.measure_kl_divergence()
             print(f"  * KL divergence: [bold]{kl_divergence:.4f}[/]")
 
         print("  * Evaluating model responses...")
         stats = self.evaluate_responses()
+        stats.kl_divergence = kl_divergence
         print(f"  * Refusals: [bold]{stats.refusals}[/]/{len(self.bad_prompts)}")
         if stats.empty:
             print(f"  * Empty responses: [bold]{stats.empty}[/]")
@@ -200,6 +215,9 @@ class Evaluator:
 
             return score, -piqa_acc_norm, stats
         else:
+            # kl_divergence is always measured in this branch.
+            assert kl_divergence is not None
+
             kl_divergence_scale = self.settings.kl_divergence_scale
             kl_divergence_target = self.settings.kl_divergence_target
 
