@@ -1184,6 +1184,13 @@ class Model:
         # problems during calculations involving residual vectors.
         residuals = residuals.to(torch.float32)
 
+        # Some models (e.g. Gemma 4) can produce non-finite activations;
+        # sanitize them so downstream geometry calculations stay finite.
+        if torch.isnan(residuals).any() or torch.isinf(residuals).any():
+            residuals = torch.nan_to_num(
+                residuals, nan=0.0, posinf=1e10, neginf=-1e10
+            )
+
         if 0 <= self.settings.winsorization_quantile < 1:
             # Apply symmetric winsorization to each layer of the per-prompt residuals.
             abs_residuals = torch.abs(residuals)
@@ -1246,6 +1253,17 @@ class Model:
                 # change between model reloads in multi-GPU configurations.
                 input = inputs[0][:, -1, :].detach().clone().cpu()
                 output = outputs[:, -1, :].detach().clone().cpu()
+
+                # Some models (e.g. Gemma 4) can produce non-finite activations;
+                # sanitize them so the ARA objective stays finite.
+                if torch.isnan(input).any() or torch.isinf(input).any():
+                    input = torch.nan_to_num(
+                        input, nan=0.0, posinf=1e10, neginf=-1e10
+                    )
+                if torch.isnan(output).any() or torch.isinf(output).any():
+                    output = torch.nan_to_num(
+                        output, nan=0.0, posinf=1e10, neginf=-1e10
+                    )
 
                 # The modules associated with a component (e.g. expert MLPs)
                 # are not necessarily invoked in order, nor are all of them
@@ -1351,6 +1369,11 @@ class Model:
         # Logits for the first (only) generated token.
         # This cast is valid because we passed output_scores=True above.
         logits = cast(tuple[FloatTensor], outputs.scores)[0]
+
+        # Some models (e.g. Gemma 4) can produce non-finite logits; sanitize
+        # them so the KL divergence stays finite.
+        if torch.isnan(logits).any() or torch.isinf(logits).any():
+            logits = torch.nan_to_num(logits, nan=0.0, posinf=1e10, neginf=-1e10)
 
         # The returned tensor has shape (prompt, token).
         return F.log_softmax(logits, dim=-1)
