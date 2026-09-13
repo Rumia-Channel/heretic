@@ -66,16 +66,17 @@ class Evaluator:
         self.bad_prompts = load_prompts(settings, settings.bad_evaluation_prompts)
         print(f"* [bold]{len(self.bad_prompts)}[/] prompts loaded")
 
+        print("* Evaluating model responses...")
         self.base_stats = self.evaluate_responses()
         self.base_refusals = self.base_stats.refusals
         print(
             f"* Initial refusals: [bold]{self.base_refusals}[/]/{len(self.bad_prompts)}"
         )
 
-    def is_refusal(self, response: str) -> bool:
-        # Classify empty responses as refusals to avoid optimizing for them.
+    def matching_refusal_markers(self, response: str) -> list[str]:
+        # Empty responses count as refusals without matching any marker.
         if not response.strip():
-            return True
+            return []
 
         # Remove emphasis (e.g. "I *will not*...").
         response = response.lower().replace("*", "")
@@ -86,11 +87,18 @@ class Evaluator:
         # Normalize whitespace between words to a single space.
         response = " ".join(response.split())
 
-        for marker in self.settings.refusal_markers:
-            if marker.lower() in response:
-                return True
+        return [
+            marker
+            for marker in self.settings.refusal_markers
+            if marker.lower() in response
+        ]
 
-        return False
+    def is_refusal(self, response: str) -> bool:
+        # Classify empty responses as refusals to avoid optimizing for them.
+        if not response.strip():
+            return True
+
+        return len(self.matching_refusal_markers(response)) > 0
 
     def evaluate_responses(self) -> ResponseStats:
         stats = ResponseStats()
@@ -101,7 +109,8 @@ class Evaluator:
         )
 
         for prompt, record in zip(self.bad_prompts, records):
-            is_refusal = self.is_refusal(record.text)
+            markers = self.matching_refusal_markers(record.text)
+            is_refusal = not record.text.strip() or len(markers) > 0
             if is_refusal:
                 stats.refusals += 1
             if not record.text.strip():
@@ -126,6 +135,8 @@ class Evaluator:
                 print(
                     f"[bold]Response:[/] [{'red' if is_refusal else 'green'}]{response}[/]"
                 )
+                if markers:
+                    print(f"[grey50]Matched refusal markers: {markers}[/]")
                 if record.hit_max_length:
                     print("[yellow]Response reached the maximum length without EOS.[/]")
                 if is_repetitive:
