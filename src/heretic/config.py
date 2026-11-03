@@ -288,12 +288,6 @@ class Settings(BaseSettings):
         description="Provisional decision probability threshold; calibrate on labeled examples.",
     )
 
-    d1_sidecar_max_samples: int = Field(
-        default=24,
-        ge=1,
-        description="Maximum generation samples assessed per evaluation; spread across the prompt list.",
-    )
-
     d1_sidecar_max_input_chars: int = Field(
         default=8000,
         ge=256,
@@ -301,7 +295,7 @@ class Settings(BaseSettings):
     )
 
     d1_sidecar_strict: bool = Field(
-        default=False,
+        default=True,
         description="If true, fail evaluation when d1 sidecar encounters an error; otherwise record it.",
     )
 
