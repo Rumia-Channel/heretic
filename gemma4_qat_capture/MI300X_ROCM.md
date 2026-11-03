@@ -23,8 +23,8 @@ train/test-split prompts, creates one Q4_0 candidate, and compares all
 held-out generations with resident `LiquidAI/d1-2B`.
 
 You need a working ROCm installation (hipconfig, rocminfo), build tools
-(CMake, C++ compiler, git, curl), uv, and preinstalled ROCm versions of
-torch and torchvision. It **fails early** if Python sees a CUDA/CPU wheel
+(CMake, C++ compiler, git, curl), and preinstalled ROCm versions of
+torch and torchvision. If uv is absent, the launcher bootstraps pinned uv 0.13.7 from the official Astral installer. It **fails early** if Python sees a CUDA/CPU wheel
 instead of a ROCm torch wheel; it does not silently install another
 backend. HF_TOKEN may be required for the official model license/access.
 
