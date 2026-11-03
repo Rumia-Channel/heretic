@@ -1,0 +1,49 @@
+name: Gemma 4 QAT GGUF capture build
+
+on:
+  push:
+    branches: [ara-gemma4-26BA4B-qat]
+    paths:
+      - "gemma4_qat_capture/**"
+      - "tests/test_gemma4_qat_capture.py"
+      - ".github/workflows/gemma4-qat-capture.yml"
+  pull_request:
+    branches: [ara-gemma4-26BA4B-qat]
+  workflow_dispatch:
+
+jobs:
+  build-cb-eval-collector:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin llama.cpp source for reproducible cb_eval API
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: fac3a894fc04901c3e5abaff457e024c6b52e04f
+          path: llama.cpp
+      - name: Configure capture binary (CPU build)
+        run: >
+          cmake -S gemma4_qat_capture -B build-gemma4-capture
+          -DLLAMA_CPP_DIR=${{ github.workspace }}/llama.cpp
+          -DGGML_CUDA=OFF -DCMAKE_BUILD_TYPE=Release
+      - name: Compile actual callback collector
+        run: cmake --build build-gemma4-capture --target gemma4-qat-capture -j 3
+
+  verify-adapter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install small CPU test environment
+        run: |
+          python -m pip install numpy pytest gguf
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Run Gemma 4 bridge tests (no model download)
+        env:
+          PYTHONPATH: src:.
+        run: python -m pytest -q tests/test_gemma4_qat_capture.py
