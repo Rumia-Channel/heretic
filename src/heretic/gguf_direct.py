@@ -211,7 +211,21 @@ def patch_q4_0_tensor(
                 target = original_values + scaled_delta.reshape(count, 32)
                 if not np.isfinite(target).all():
                     raise ValueError("Delta caused non-finite Q4_0 targets")
-                encoded = encode_q4_0_blocks(target)
+                encoded_array = np.frombuffer(
+                    encode_q4_0_blocks(target), dtype=np.uint8
+                ).reshape(count, Q4_0_BLOCK_BYTES).copy()
+                # QAT-compatible: never re-encode blocks for which the
+                # requested delta is exactly zero. This preserves official
+                # Q4_0 bytes (including noncanonical quantization results).
+                untouched = np.all(
+                    scaled_delta.reshape(count, 32) == 0, axis=1
+                )
+                if np.any(untouched):
+                    old_array = np.frombuffer(
+                        old_raw, dtype=np.uint8
+                    ).reshape(count, Q4_0_BLOCK_BYTES)
+                    encoded_array[untouched] = old_array[untouched]
+                encoded = encoded_array.tobytes()
                 new_values = decode_q4_0_blocks(encoded)
                 max_change = max(
                     max_change,
