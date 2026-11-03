@@ -28,16 +28,18 @@ def _choose_column(features, requested=None):
     raise ValueError(f"No prompt column detected; features: {list(features)}")
 
 
-def export_prompts(destination: Path, *, limit: int, good_col=None, bad_col=None):
+def export_prompts(destination: Path, *, limit: int, split_name: str = "train", good_col=None, bad_col=None):
     from datasets import load_dataset
 
     if limit < 1:
         raise ValueError("limit must be positive")
+    if split_name not in ("train", "test"):
+        raise ValueError("Only train or test split is allowed")
     if destination.exists():
         raise FileExistsError(destination)
     outputs = {}
     for kind, repo in DATASETS.items():
-        split = load_dataset(repo, split="train")
+        split = load_dataset(repo, split=split_name)
         column = _choose_column(
             split.features, good_col if kind == "good" else bad_col,
         )
@@ -57,7 +59,7 @@ def export_prompts(destination: Path, *, limit: int, good_col=None, bad_col=None
         if not prompts:
             raise ValueError(f"No usable training prompts from {repo}")
         outputs[kind] = {
-            "repo": repo, "split": "train", "column": column, "count": len(prompts),
+            "repo": repo, "split": split_name, "column": column, "count": len(prompts),
             "prompts": prompts,
         }
     destination.mkdir(parents=True)
@@ -80,11 +82,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--limit", type=int, default=128)
+    parser.add_argument("--split", choices=("train", "test"), default="train")
     parser.add_argument("--good-column", default=None)
     parser.add_argument("--bad-column", default=None)
     args = parser.parse_args()
     print(json.dumps(export_prompts(
-        args.out, limit=args.limit,
+        args.out, limit=args.limit, split_name=args.split,
         good_col=args.good_column, bad_col=args.bad_column,
     ), ensure_ascii=False, indent=2))
 
