@@ -49,6 +49,10 @@ decision_sidecar = [
     "torchvision",
     "pillow",
 ]
+# Read-only GGUF tensor inventory for the official QAT model.
+qat_gguf = [
+    "gguf",
+]
 research = [
     "geom-median~=0.1",
     "imageio~=2.37",
