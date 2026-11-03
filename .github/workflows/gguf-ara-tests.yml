@@ -1,0 +1,48 @@
+name: GGUF ARA and d1-2B unit tests
+
+on:
+  push:
+    branches:
+      - ara
+      - ara-gemma4-26BA4B-qat
+    paths:
+      - "src/heretic/gguf*"
+      - "src/heretic/qat_gguf.py"
+      - "src/heretic/quantization.py"
+      - "src/heretic/sidecar_d1.py"
+      - "tests/test_gguf*"
+      - "tests/test_qat_gguf.py"
+      - "tests/test_quantization.py"
+      - "tests/test_sidecar_d1.py"
+      - ".github/workflows/gguf-ara-tests.yml"
+  pull_request:
+    branches:
+      - ara
+      - ara-gemma4-26BA4B-qat
+  workflow_dispatch:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install CPU-only test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy pytest gguf
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Run unit tests without GPU or model downloads
+        env:
+          PYTHONPATH: src
+        run: |
+          python -m pytest -q \
+            tests/test_gguf_direct.py \
+            tests/test_gguf_ara_optimizer.py \
+            tests/test_gguf_stream_monitor.py \
+            tests/test_qat_gguf.py \
+            tests/test_quantization.py \
+            tests/test_sidecar_d1.py
