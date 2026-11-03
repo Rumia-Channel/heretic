@@ -23,6 +23,8 @@ LAYER_COUNT="${LAYER_COUNT:-3}"
 TRAIN_LIMIT="${TRAIN_LIMIT:-128}"
 EVAL_LIMIT="${EVAL_LIMIT:-24}"
 ARA_STEPS="${ARA_STEPS:-15}"
+ARA_LR="${ARA_LR:-0.0005}"
+ARA_MAX_ABS_DELTA="${ARA_MAX_ABS_DELTA:-0.05}"
 EVAL_MAX_TOKENS="${EVAL_MAX_TOKENS:-384}"
 JUDGE_THRESHOLD="${JUDGE_THRESHOLD:-0.75}"
 JUDGE_INTERVAL_CHARS="${JUDGE_INTERVAL_CHARS:-256}"
@@ -234,12 +236,22 @@ on_gpu "$GPU_ARA" "$PYTHON" "$ROOT/gemma4_qat_capture/run_qat_ara.py" \
   --good "$RUN_DIR/train/good.txt" --bad "$RUN_DIR/train/bad.txt" \
   --out "$RUN_DIR/ara" --layers "$LAYERS" \
   --gpu-layers 999 --batch "$BATCH_SIZE" --ctx "$CONTEXT_SIZE" \
-  --device cuda:0 --steps "$ARA_STEPS" >"$RUN_DIR/ara.log" 2>&1
+  --device cuda:0 --steps "$ARA_STEPS" \
+  --learning-rate "$ARA_LR" --max-abs-delta "$ARA_MAX_ABS_DELTA" \
+  >"$RUN_DIR/ara.log" 2>&1
 
 wait "$baseline_pid"
 baseline_pid=""
 [[ -s "$RUN_DIR/baseline.json" && -s "$RUN_DIR/ara/candidate.gguf" ]] ||
   die "Incomplete baseline or ARA candidate"
+"$PYTHON" - "$RUN_DIR/ara/run.json" <<'PY'
+import json, sys
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+changed = sum(patch["blocks_changed"] for patch in report["ara_summary"]["q4_0_patches"])
+print("Q4_0 blocks modified:", changed)
+if changed == 0:
+    raise SystemExit("ARA quantized edit is a no-op; adjust learning rate/steps and retry")
+PY
 
 log "Evaluating Q4_0 candidate without reloading resident d1-2B"
 kill "$server_pid"
@@ -258,7 +270,7 @@ kill -0 "$proxy_pid" 2>/dev/null || die "Resident d1 monitor exited"
 mv "$RUN_DIR/d1-live.jsonl" "$RUN_DIR/candidate-d1.jsonl"
 "$PYTHON" "$ROOT/gemma4_qat_capture/compare_rocm_evals.py" \
   --base "$RUN_DIR/baseline.json" --candidate "$RUN_DIR/candidate.json" \
-  --out "$RUN_DIR/comparison.json" >"$RUN_DIR/comparison.log"
+  --out "$RUN_DIR/comparison.json" --fail-on-regression >"$RUN_DIR/comparison.log"
 log "Candidate: $RUN_DIR/ara/candidate.gguf"
 log "Comparison: $RUN_DIR/comparison.json"
 log "Experimental only: independent math/code and KL evaluations still required."
