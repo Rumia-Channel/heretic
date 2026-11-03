@@ -77,7 +77,17 @@ wait_ready() {
   done
   die "$role health check timed out"
 }
-for exe in git cmake curl uv hipconfig rocminfo "$ROCM_PYTHON" find realpath; do need "$exe"; done
+for exe in git cmake curl hipconfig rocminfo "$ROCM_PYTHON" find realpath; do need "$exe"; done
+if ! command -v uv >/dev/null 2>&1; then
+  log "Bootstrapping pinned uv 0.13.7 using its official installer"
+  mkdir -p "$ROOT/.deps/bin"
+  installer_file="$(mktemp)"
+  curl -LfsS --retry 3 https://astral.sh/uv/0.13.7/install.sh -o "$installer_file"
+  UV_UNMANAGED_INSTALL="$ROOT/.deps/bin" sh "$installer_file"
+  rm -f "$installer_file"
+  export PATH="$ROOT/.deps/bin:$PATH"
+fi
+need uv
 for value in "$GPU_ARA" "$GPU_INFER" "$GPU_JUDGE" "$LAYER_COUNT" \
   "$TRAIN_LIMIT" "$EVAL_LIMIT" "$ARA_STEPS" "$EVAL_MAX_TOKENS" \
   "$INFER_PORT" "$PROXY_PORT" "$CONTEXT_SIZE" "$BATCH_SIZE"; do
