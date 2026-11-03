@@ -153,7 +153,8 @@ class D1Sidecar:
         model = self._load()
         state = {
             "user_prompt": prompt[: self.max_input_chars],
-            "model_response": response[: self.max_input_chars],
+            # Preserve the tail: degeneration often begins late in generation.
+            "model_response": response[-self.max_input_chars :],
             "response_truncated_for_monitor": len(response) > self.max_input_chars,
             "signals": {
                 "token_repetition": token_repetition,
