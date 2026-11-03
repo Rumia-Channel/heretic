@@ -13,6 +13,7 @@ from torch import Tensor
 
 from .config import Settings
 from .model import Model, ResponseRecord
+from .sidecar_d1 import D1Sidecar
 from .utils import (
     Prompt,
     has_periodic_suffix,
@@ -31,6 +32,12 @@ class ResponseStats:
     empty: int = 0
     repetitive: int = 0
     hit_max_length: int = 0
+    d1_evaluated: int = 0
+    d1_errors: int = 0
+    d1_refusal_flags: int = 0
+    d1_loop_flags: int = 0
+    d1_incomplete_flags: int = 0
+    d1_off_topic_flags: int = 0
     records: list[ResponseRecord] = field(default_factory=list)
     # Measured first-token KL divergence, when computed. Under PIQA this is
     # only populated when record_kl_with_piqa is enabled.
@@ -59,6 +66,15 @@ class Evaluator:
         self.settings = settings
         self.model = model
         self.evaluation_index = 0
+        self.d1_sidecar = (
+            D1Sidecar(
+                model_name=settings.d1_sidecar_model,
+                device=settings.d1_sidecar_device,
+                max_input_chars=settings.d1_sidecar_max_input_chars,
+            )
+            if settings.d1_sidecar_enabled
+            else None
+        )
 
         if (
             not settings.use_piqa
@@ -135,7 +151,14 @@ class Evaluator:
             skip_special_tokens=True,
         )
 
-        for prompt, record in zip(self.bad_prompts, records):
+        # Spread d1 checks across the evaluation inputs, not only the first N.
+        sampled = set()
+        if self.d1_sidecar is not None and records:
+            count = min(self.settings.d1_sidecar_max_samples, len(records))
+            sampled = {i * len(records) // count for i in range(count)}
+        d1_results: list[dict | None] = []
+
+        for index, (prompt, record) in enumerate(zip(self.bad_prompts, records)):
             markers = self.matching_refusal_markers(record.text)
             record.matched_markers = markers
             is_refusal = not record.text.strip() or len(markers) > 0
@@ -152,6 +175,44 @@ class Evaluator:
                 stats.repetitive += 1
             if record.hit_max_length:
                 stats.hit_max_length += 1
+
+            d1_result: dict | None = None
+            if index in sampled and self.d1_sidecar is not None:
+                try:
+                    verdict = self.d1_sidecar.assess(
+                        prompt=prompt.user,
+                        response=record.text,
+                        token_repetition=is_repetitive,
+                        hit_max_length=record.hit_max_length,
+                        eos_seen=record.eos_seen,
+                    )
+                    flags = verdict.flags(self.settings.d1_sidecar_threshold)
+                    d1_result = {
+                        "model": self.settings.d1_sidecar_model,
+                        "probabilities": verdict.probabilities(),
+                        "flags": flags,
+                        "threshold": self.settings.d1_sidecar_threshold,
+                    }
+                    stats.d1_evaluated += 1
+                    stats.d1_refusal_flags += int(flags["refusal"])
+                    stats.d1_loop_flags += int(flags["looping"])
+                    stats.d1_incomplete_flags += int(flags["incomplete"])
+                    stats.d1_off_topic_flags += int(flags["off_topic"])
+                except Exception as exc:
+                    stats.d1_errors += 1
+                    d1_result = {
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "model": self.settings.d1_sidecar_model,
+                    }
+                    if self.settings.d1_sidecar_strict:
+                        raise RuntimeError(
+                            f"d1 sidecar failed on prompt index {index}"
+                        ) from exc
+                    print(
+                        f"[yellow]d1 monitor unavailable for prompt {index}: "
+                        f"{type(exc).__name__}: {exc}[/]"
+                    )
+            d1_results.append(d1_result)
 
             if self.settings.print_responses:
                 print()
@@ -175,7 +236,9 @@ class Evaluator:
         if self.settings.evaluation_log_path:
             self.evaluation_index += 1
             with open(self.settings.evaluation_log_path, "a", encoding="utf-8") as f:
-                for prompt, record in zip(self.bad_prompts, records):
+                for prompt, record, d1_result in zip(
+                    self.bad_prompts, records, d1_results
+                ):
                     f.write(
                         json.dumps(
                             {
@@ -187,6 +250,7 @@ class Evaluator:
                                 "eos_seen": record.eos_seen,
                                 "hit_max_length": record.hit_max_length,
                                 "matched_markers": record.matched_markers,
+                                "d1_sidecar": d1_result,
                             },
                             ensure_ascii=False,
                         )
@@ -256,6 +320,14 @@ class Evaluator:
         if stats.hit_max_length:
             print(
                 f"  * Reached max length without EOS: [bold]{stats.hit_max_length}[/]"
+            )
+        if self.d1_sidecar is not None:
+            print(
+                f"  * d1 sidecar (sampled): {stats.d1_evaluated} assessed, "
+                f"{stats.d1_errors} errors, {stats.d1_refusal_flags} refusals, "
+                f"{stats.d1_loop_flags} loops, "
+                f"{stats.d1_incomplete_flags} incomplete, "
+                f"{stats.d1_off_topic_flags} off-topic"
             )
 
         if self.settings.kl_context_positions > 0:
