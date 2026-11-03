@@ -43,6 +43,7 @@ jobs:
             tests/test_gguf_direct.py \
             tests/test_gguf_batch.py \
             tests/test_gguf_ara_optimizer.py \
+            tests/test_gguf_ara_batch_optimizer.py \
             tests/test_gguf_stream_monitor.py \
             tests/test_gguf_monitor_proxy.py \
             tests/test_qat_gguf.py \
