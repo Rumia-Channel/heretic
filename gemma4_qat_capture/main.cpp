@@ -273,6 +273,15 @@ int main(int argc, char ** argv) {
         model_params.n_gpu_layers = gpu_layers;
         llama_model * model = llama_model_load_from_file(model_path.string().c_str(), model_params);
         if (!model) throw std::runtime_error("Cannot load Gemma 4 GGUF model");
+        char architecture[128] = {};
+        if (llama_model_meta_val_str(
+                model, "general.architecture", architecture, sizeof(architecture)) < 0 ||
+            std::string(architecture) != "gemma4") {
+            throw std::runtime_error(
+                std::string("This activation collector only supports GGUF Gemma 4; got ") +
+                architecture
+            );
+        }
         capture_state state;
         state.layers = parse_layers(argv[5], llama_model_n_layer(model));
         state.out = output_dir;
