@@ -43,6 +43,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Opt-in Liquid AI d1-2B decision sidecar. Requires custom remote model code.
+decision_sidecar = [
+    "transformers>=5.19",
+    "torchvision",
+    "pillow",
+]
+# Read-only GGUF tensor inventory for the official QAT model.
+qat_gguf = [
+    "gguf",
+]
 research = [
     "geom-median~=0.1",
     "imageio~=2.37",

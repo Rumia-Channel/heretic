@@ -264,6 +264,41 @@ class Settings(BaseSettings):
         ),
     )
 
+    # The local d1 sidecar uses LiquidAI's system_one decision API, not
+    # OpenAI chat completions. It is disabled unless explicitly enabled.
+    d1_sidecar_enabled: bool = Field(
+        default=False,
+        description="Evaluate generated responses using a separate local Liquid AI d1 decision model.",
+    )
+
+    d1_sidecar_model: str = Field(
+        default="LiquidAI/d1-2B",
+        description="Hugging Face model ID of the local Liquid AI d1 decision model.",
+    )
+
+    d1_sidecar_device: str = Field(
+        default="cpu",
+        description="Sidecar device (cpu, cuda, cuda:0, mps, or auto). Default CPU avoids GPU contention.",
+    )
+
+    d1_sidecar_threshold: float = Field(
+        default=0.75,
+        gt=0,
+        lt=1,
+        description="Provisional decision probability threshold; calibrate on labeled examples.",
+    )
+
+    d1_sidecar_max_input_chars: int = Field(
+        default=8000,
+        ge=256,
+        description="Maximum prompt/response characters sent to local d1 monitor per item.",
+    )
+
+    d1_sidecar_strict: bool = Field(
+        default=True,
+        description="If true, fail evaluation when d1 sidecar encounters an error; otherwise record it.",
+    )
+
     use_piqa: bool = Field(
         default=False,
         description=(
