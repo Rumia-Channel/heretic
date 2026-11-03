@@ -114,11 +114,28 @@ a response is safe. Calibrate the threshold on separately annotated Japanese
 responses, especially intentional repetition (lists, poems, code) and
 partial answers. Flagged examples require review.
 
+## Read-only QAT GGUF inventory
+
+The first GGUF-specific function has now been added: `heretic.qat_gguf.inspect_qat_gguf`.
+It uses the reference `gguf.GGUFReader` and reports each stored quantization
+type without changing bytes. It explicitly rejects non-Q4_0 artifacts.
+
+```powershell
+uv sync --extra qat_gguf
+uv run --extra qat_gguf python scripts/inspect_qat_gguf.py --model "C:\\Models\\gemma-4-26B-A4B-qat-q4_0.gguf" --sha256
+```
+
+Replace the example filename with the **actual** local GGUF path. `--sha256`
+reads the entire file; omit it when you only need the tensor inventory.
+
+This inventory is **not** a GGUF training or inference backend. It is the
+first validation step needed before wiring ARA to Q4_0 tensor blocks.
+
 ## Direct Q4_0 work remaining (blocking)
 
-1. Implement a read-only official GGUF inspection and baseline inference
-   adapter that records tensor quantization types and the original artifact
-   hash. Fail explicitly on unsupported packed-MoE tensors.
+1. **Completed partially:** read-only GGUF tensor inventory and optional SHA-256
+   hashing. **Still needed:** baseline GGUF inference, packed-MoE detection,
+   tensor-level patch eligibility checks and a pinned artifact manifest.
 2. Decide how ARA's trainable intervention is represented while keeping all
    **original Q4_0 storage bytes frozen** (e.g. separate adapter, or targeted
    dequantize/edit/re-encode with an exact Q4_0 kernel).
