@@ -36,6 +36,20 @@ max_batch_size = 128
 # Maximum number of tokens to generate for each response.
 max_response_length = 100
 
+# Optional local LiquidAI/d1-2B decision sidecar.
+# Not an OpenAI chat model: uses system_one() to inspect generation results.
+# Requires: uv sync --extra decision_sidecar
+# Leave disabled to avoid downloading the model or using extra RAM/VRAM.
+d1_sidecar_enabled = false
+d1_sidecar_model = "LiquidAI/d1-2B"
+d1_sidecar_device = "cpu"  # CPU by default so Gemma's GPU stays available.
+d1_sidecar_threshold = 0.75  # Provisional: calibrate on labeled Japanese outputs.
+d1_sidecar_max_samples = 24  # Spread across each evaluation set.
+d1_sidecar_max_input_chars = 8000
+d1_sidecar_strict = false  # Set true to abort evaluations on sidecar failures.
+# evaluation_log_path = "ara-evaluation-with-d1.jsonl"
+
+
 # Whether to print prompt/response pairs when counting refusals.
 print_responses = false
 
