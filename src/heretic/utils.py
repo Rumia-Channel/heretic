@@ -238,6 +238,17 @@ def batchify(items: list[T], batch_size: int) -> list[list[T]]:
 # For each vector in the 2D-tensor `a`, computes the mean Euclidean distance
 # to the `k` nearest neighbors of the vector among the vectors in the 2D-tensor `b`.
 def mean_distances_to_knn(a: Tensor, b: Tensor, k: int) -> Tensor:
+    # Routed MoE experts can have fewer recorded samples than the requested
+    # neighbor count; cap k rather than allowing topk() to raise. Empty inputs
+    # are invalid here and should be skipped explicitly by the caller.
+    if a.ndim != 2 or b.ndim != 2 or a.shape[1] != b.shape[1]:
+        raise ValueError("kNN inputs must be 2D matrices with equal feature widths")
+    if a.shape[0] == 0 or b.shape[0] == 0:
+        raise ValueError("kNN inputs must contain at least one vector")
+    if k < 1:
+        raise ValueError("kNN neighbor count must be positive")
+    k = min(k, b.shape[0])
+
     # Some models (e.g. Gemma 4) can produce non-finite activations; sanitize
     # inputs and outputs so a single bad value cannot poison the loss.
     if torch.isnan(a).any() or torch.isinf(a).any():
