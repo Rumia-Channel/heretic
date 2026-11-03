@@ -75,6 +75,11 @@ class Evaluator:
             if settings.d1_sidecar_enabled
             else None
         )
+        # Always-on: fail early if the resident judge cannot be started.
+        # Keep it loaded across all ARA trials; no sampling or lazy unload.
+        if self.d1_sidecar is not None:
+            print("[cyan]Loading resident LiquidAI/d1-2B sidecar...[/]")
+            self.d1_sidecar._load()
 
         if (
             not settings.use_piqa
@@ -151,11 +156,7 @@ class Evaluator:
             skip_special_tokens=True,
         )
 
-        # Spread d1 checks across the evaluation inputs, not only the first N.
-        sampled = set()
-        if self.d1_sidecar is not None and records:
-            count = min(self.settings.d1_sidecar_max_samples, len(records))
-            sampled = {i * len(records) // count for i in range(count)}
+        # Always-on: assess EVERY generated response. No sampling.
         d1_results: list[dict | None] = []
 
         for index, (prompt, record) in enumerate(zip(self.bad_prompts, records)):
@@ -177,7 +178,7 @@ class Evaluator:
                 stats.hit_max_length += 1
 
             d1_result: dict | None = None
-            if index in sampled and self.d1_sidecar is not None:
+            if self.d1_sidecar is not None:
                 try:
                     verdict = self.d1_sidecar.assess(
                         prompt=prompt.user,
@@ -323,7 +324,7 @@ class Evaluator:
             )
         if self.d1_sidecar is not None:
             print(
-                f"  * d1 sidecar (sampled): {stats.d1_evaluated} assessed, "
+                f"  * d1 sidecar (all generations): {stats.d1_evaluated} assessed, "
                 f"{stats.d1_errors} errors, {stats.d1_refusal_flags} refusals, "
                 f"{stats.d1_loop_flags} loops, "
                 f"{stats.d1_incomplete_flags} incomplete, "
