@@ -28,44 +28,45 @@ torch and torchvision. If uv is absent, the launcher bootstraps pinned uv 0.13.7
 instead of a ROCm torch wheel; it does not silently install another
 backend. HF_TOKEN may be required for the official model license/access.
 
-### Process topology (default: 3 MI300X GPUs)
+### Process topology (default: ONE MI300X GPU)
 
 ```text
-MI300X GPU 0       MI300X GPU 1           MI300X GPU 2
--------------      -----------------      -----------------------
-official GGUF      official GGUF           LiquidAI/d1-2B
-cb_eval capture    llama-server            always resident
-Q4_0 STE ARA  <--> d1-proxy -> test prompts -> d1 decisions
-new GGUF write     test-stream eval       refusal/looping/etc
-   [ARA + baseline evaluation run concurrently]
-        |
-        v
-candidate GGUF ---> SAME llama-server port --> SAME resident d1
-        |
-        v
-comparison.json (failed/no-op/regression = nonzero exit status)
+                Physical MI300X GPU 0 (one GPU / shared HBM)
+                            |
+             +--------------+--------------+
+             |              |              |
+       llama.cpp       Q4_0 ARA         LiquidAI/d1-2B
+       llama-server    + cb_eval        resident judge
+       baseline eval   collector        (PyTorch ROCm)
+             |              |              ^
+             +--> proxy ----+              |
+                  stream ---> d1 judgment -+
+             |
+             +-- candidate GGUF evaluation after ARA completes
+                     (d1 stays loaded)
 ```
+
+**No GPU 1 or GPU 2 is required.** `GPU_ARA`, `GPU_INFER` and
+`GPU_JUDGE` all default to **0**, and the single-GPU launcher refuses
+mismatched GPU identifiers. Three processes run concurrently on the same
+physical accelerator during baseline evaluation and ARA. This is
+**process concurrency**, not guaranteed higher throughput: model inference,
+ARA training and the d1 judge contend for GPU compute, memory bandwidth
+and HBM capacity. The script fails on OOM; it does not silently fall
+back to CPU or an alternative quantization format.
 
 All decisions are generated through the proxy, not through direct
 llama-server calls. A proxy log verdict is REQUIRED for each response; if
 d1 fails/OOMs, the evaluation stops rather than treating it as success.
-The d1 process remains alive across the official/candidate server restart.
+The d1 process remains alive across the original/candidate server restart.
 By default it checks every 256 generated characters and once at the end.
 It is a post-hoc/streaming monitor, NOT a differentiable loss and NOT an
 automatic weight-update controller.
 
-On Linux the launcher isolates each worker using
-`ROCR_VISIBLE_DEVICES=N`, so the ROCm PyTorch device within that process
-is called `cuda:0`. This naming is normal for AMD ROCm PyTorch.
-The script requires 3 distinct devices by default.
-
-For a 2-GPU instance, sharing the original GGUF inference GPU with ARA
-is possible but can cause OOM/contention:
-
-```bash
-GPU_ARA=0 GPU_INFER=0 GPU_JUDGE=1 ALLOW_SHARED_GPU=1 \
-  bash gemma4_qat_capture/run_mi300x_rocm.sh
-```
+On Linux the launcher masks the physical accelerator to GPU 0 using
+`ROCR_VISIBLE_DEVICES=0`; ROCm PyTorch exposes this as `cuda:0`.
+This naming is normal for AMD ROCm PyTorch. No GPU partitioning or
+multi-device communication is assumed.
 
 For a separate local official model path:
 
@@ -78,7 +79,7 @@ GGUF_PATH=/data/models/gemma-4-26B_q4_0-it.gguf \
 
 | Environment | Default | Description |
 |---|---|---|
-| `GPU_ARA` / `GPU_INFER` / `GPU_JUDGE` | 0 / 1 / 2 | Physical MI300X IDs |
+| `GPU_ARA` / `GPU_INFER` / `GPU_JUDGE` | 0 / 0 / 0 | Same physical MI300X GPU; all must match |
 | `RUN_DIR` | `runs/mi300x-UTC-timestamp` | Per-run output directory; no overwrite |
 | `GGUF_PATH` | `models/gemma-4-26B_q4_0-it.gguf` | Exact Google official QAT Q4_0 |
 | `LLAMA_CPP_DIR` | `.deps/llama.cpp` | Pinned llama.cpp source |
@@ -121,9 +122,9 @@ checks are needed before publishing.
    matrices; **packed MoE Experts are NOT covered**.
 2. ARA is a local, quantization-aware STE objective; no exact gradient
    through ggml's discrete 4-bit integer codes is claimed.
-3. ARA optimization runs on **one** MI300X, concurrently with baseline
-   model inference and d1 judgements on other MI300Xs. Selected ARA
-   layers are not themselves distributed across multiple workers.
+3. ARA optimization, the baseline GGUF inference and d1 judgements
+   share **one** MI300X. Selected ARA layers are not distributed across
+   multiple workers. Concurrent jobs may contend for HBM and throughput.
 4. d1 results are not continuously generated for the candidate while its
    weights are still being optimized; this requires intermediate
    checkpoint generation. The baseline is monitored concurrently, then
