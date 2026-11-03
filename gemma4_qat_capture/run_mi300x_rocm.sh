@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# AMD MI300X/ROCm: run official QAT Q4_0 GGUF ARA while a resident
-# LiquidAI/d1-2B judges the ORIGINAL GGUF concurrently. Then judge candidate.
+# ONE AMD MI300X/ROCm GPU: run official QAT Q4_0 GGUF ARA while a
+# resident LiquidAI/d1-2B judges the ORIGINAL GGUF concurrently.
+# All workloads share the SAME physical GPU. Then judge the candidate.
 # This produces a CANDIDATE, not a proven quality-preserving final model.
 set -Eeuo pipefail
 umask 077
@@ -15,9 +16,9 @@ BUILD_DIR="${BUILD_DIR:-$ROOT/build-gemma4-mi300x}"
 VENV_DIR="${VENV_DIR:-$ROOT/.venv-rocm-mi300x}"
 ROCM_PYTHON="${ROCM_PYTHON:-python3}"
 GPU_ARA="${GPU_ARA:-0}"
-GPU_INFER="${GPU_INFER:-1}"
-GPU_JUDGE="${GPU_JUDGE:-2}"
-ALLOW_SHARED_GPU="${ALLOW_SHARED_GPU:-0}"
+GPU_INFER="${GPU_INFER:-0}"
+GPU_JUDGE="${GPU_JUDGE:-0}"
+ALLOW_SHARED_GPU="${ALLOW_SHARED_GPU:-1}"
 LAYERS="${LAYERS:-auto}"
 LAYER_COUNT="${LAYER_COUNT:-3}"
 TRAIN_LIMIT="${TRAIN_LIMIT:-128}"
@@ -97,12 +98,13 @@ done
   die "Counts must be positive"
 (( INFER_PORT != PROXY_PORT )) || die "Inference and proxy ports must differ"
 [[ ! -e "$RUN_DIR" ]] || die "RUN_DIR already exists: $RUN_DIR"
-if [[ "$GPU_ARA" == "$GPU_INFER" || "$GPU_ARA" == "$GPU_JUDGE" ||
-      "$GPU_INFER" == "$GPU_JUDGE" ]]; then
-  [[ "$ALLOW_SHARED_GPU" == "1" ]] ||
-    die "Set three distinct GPU IDs, or explicitly ALLOW_SHARED_GPU=1"
-  log "WARNING: shared MI300X can cause OOM/contention"
+# One MI300X is the supported default. Avoid silently requesting GPU 1/2
+# or treating the single card as three devices.
+if [[ "$GPU_ARA" != "$GPU_INFER" || "$GPU_ARA" != "$GPU_JUDGE" ]]; then
+  die "This single-MI300X runner requires GPU_ARA=GPU_INFER=GPU_JUDGE (default 0)"
 fi
+log "Single MI300X GPU $GPU_ARA: sharing GPU among inference, ARA and resident d1-2B"
+log "Parallel jobs share HBM; an out-of-memory failure is fatal (no CPU fallback)"
 
 log "Checking AMD ROCm PyTorch (no silent CUDA wheel fallback)"
 "$ROCM_PYTHON" - <<'PY'
@@ -130,15 +132,13 @@ except Exception as exc:
     ) from exc
 print("torch", torch.__version__, "HIP", torch.version.hip)
 PY
-for gpu in "$GPU_ARA" "$GPU_INFER" "$GPU_JUDGE"; do
-  on_gpu "$gpu" "$PYTHON" - <<'PY'
+on_gpu "$GPU_ARA" "$PYTHON" - <<'PY'
 import torch
 assert torch.cuda.device_count() == 1, "ROCR_VISIBLE_DEVICES must expose one GPU"
 arch = str(getattr(torch.cuda.get_device_properties(0), "gcnArchName", ""))
 assert "gfx942" in arch, "Expected MI300X gfx942, got " + repr(arch)
 print("MI300X", torch.cuda.get_device_name(0), arch)
 PY
-done
 
 # Official Google QAT Q4_0 artifact (not QAT-unquantized / BF16).
 if [[ ! -s "$GGUF_PATH" ]]; then
@@ -232,7 +232,7 @@ on_gpu "$GPU_JUDGE" "$PYTHON" "$ROOT/scripts/serve_gguf_d1_proxy.py" \
 proxy_pid=$!
 wait_ready "http://127.0.0.1:$PROXY_PORT/healthz" "$proxy_pid" "resident d1 proxy"
 
-log "Parallel execution: held-out baseline+d1 on GPUs $GPU_INFER/$GPU_JUDGE and ARA on $GPU_ARA"
+log "Parallel on ONE MI300X GPU $GPU_ARA: baseline GGUF inference + resident d1 + ARA"
 "$PYTHON" "$ROOT/gemma4_qat_capture/eval_rocm_sidecar.py" \
   --proxy "http://127.0.0.1:$PROXY_PORT" --model local \
   --good "$RUN_DIR/test/good.txt" --bad "$RUN_DIR/test/bad.txt" \
