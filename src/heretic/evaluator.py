@@ -38,6 +38,11 @@ class ResponseStats:
     d1_loop_flags: int = 0
     d1_incomplete_flags: int = 0
     d1_off_topic_flags: int = 0
+    d1_good_evaluated: int = 0
+    d1_good_errors: int = 0
+    d1_good_loop_flags: int = 0
+    d1_good_incomplete_flags: int = 0
+    d1_good_off_topic_flags: int = 0
     records: list[ResponseRecord] = field(default_factory=list)
     # Measured first-token KL divergence, when computed. Under PIQA this is
     # only populated when record_kl_with_piqa is enabled.
@@ -85,6 +90,7 @@ class Evaluator:
             not settings.use_piqa
             or settings.record_kl_with_piqa
             or settings.kl_context_positions > 0
+            or settings.d1_sidecar_enabled
         ):
             print()
             print(
@@ -116,6 +122,7 @@ class Evaluator:
 
         print("* Evaluating model responses...")
         self.base_stats = self.evaluate_responses()
+        self._monitor_good_generations(self.base_stats)
         self.base_refusals = self.base_stats.refusals
         print(
             f"* Initial refusals: [bold]{self.base_refusals}[/]/{len(self.bad_prompts)}"
@@ -244,6 +251,7 @@ class Evaluator:
                         json.dumps(
                             {
                                 "evaluation_index": self.evaluation_index,
+                                "prompt_group": "bad",
                                 "system_prompt": prompt.system,
                                 "prompt": prompt.user,
                                 "response": record.text,
@@ -262,6 +270,83 @@ class Evaluator:
             print()
 
         return stats
+
+    def _monitor_good_generations(self, stats: ResponseStats) -> None:
+        """Check every ordinary-use generation with resident d1.
+
+        This runs in addition to the original KL-only quality metric. It does
+        not alter Optuna's objective; it makes generation degeneration visible.
+        """
+        if self.d1_sidecar is None:
+            return
+        records = self.model.get_response_records_batched(
+            self.good_prompts, skip_special_tokens=True,
+        )
+        if len(records) != len(self.good_prompts):
+            raise RuntimeError("Good-prompt generation count mismatch")
+        log_path = self.settings.evaluation_log_path
+        for prompt, record in zip(self.good_prompts, records):
+            is_repetitive = (
+                repeated_ngram_fraction(record.token_ids)
+                >= REPETITION_NGRAM_FRACTION
+                or has_periodic_suffix(record.token_ids)
+            )
+            result: dict
+            try:
+                verdict = self.d1_sidecar.assess(
+                    prompt=prompt.user,
+                    response=record.text,
+                    token_repetition=is_repetitive,
+                    hit_max_length=record.hit_max_length,
+                    eos_seen=record.eos_seen,
+                )
+                flags = verdict.flags(self.settings.d1_sidecar_threshold)
+                result = {
+                    "model": self.settings.d1_sidecar_model,
+                    "probabilities": verdict.probabilities(),
+                    "flags": flags,
+                    "threshold": self.settings.d1_sidecar_threshold,
+                }
+                stats.d1_good_evaluated += 1
+                stats.d1_good_loop_flags += int(flags["looping"])
+                stats.d1_good_incomplete_flags += int(flags["incomplete"])
+                stats.d1_good_off_topic_flags += int(flags["off_topic"])
+            except Exception as exc:
+                stats.d1_good_errors += 1
+                result = {
+                    "model": self.settings.d1_sidecar_model,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+                if self.settings.d1_sidecar_strict:
+                    raise RuntimeError(
+                        "Resident d1 judge failed on an ordinary-use response"
+                    ) from exc
+                print(f"[yellow]d1 ordinary-response monitoring failed: {exc}[/]")
+            if log_path:
+                with open(log_path, "a", encoding="utf-8") as stream:
+                    stream.write(
+                        json.dumps(
+                            {
+                                "evaluation_index": self.evaluation_index,
+                                "prompt_group": "good",
+                                "system_prompt": prompt.system,
+                                "prompt": prompt.user,
+                                "response": record.text,
+                                "token_count": len(record.token_ids),
+                                "eos_seen": record.eos_seen,
+                                "hit_max_length": record.hit_max_length,
+                                "token_repetition": is_repetitive,
+                                "d1_sidecar": result,
+                            },
+                            ensure_ascii=False,
+                        ) + "\n"
+                    )
+        print(
+            f"  * d1 ordinary-use checks: {stats.d1_good_evaluated} passed, "
+            f"{stats.d1_good_errors} errors, "
+            f"{stats.d1_good_loop_flags} looping, "
+            f"{stats.d1_good_incomplete_flags} incomplete"
+        )
 
     def measure_kl_divergence(self) -> float:
         logprobs = self.model.get_logprobs_batched(self.good_prompts)
@@ -312,6 +397,7 @@ class Evaluator:
 
         print("  * Evaluating model responses...")
         stats = self.evaluate_responses()
+        self._monitor_good_generations(stats)
         stats.kl_divergence = kl_divergence
         print(f"  * Refusals: [bold]{stats.refusals}[/]/{len(self.bad_prompts)}")
         if stats.empty:
