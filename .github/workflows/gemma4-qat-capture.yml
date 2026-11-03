@@ -6,6 +6,7 @@ on:
     paths:
       - "gemma4_qat_capture/**"
       - "tests/test_gemma4_qat_capture.py"
+      - "tests/test_gemma4_mi300x_rocm.py"
       - ".github/workflows/gemma4-qat-capture.yml"
   pull_request:
     branches: [ara-gemma4-26BA4B-qat]
@@ -46,4 +47,6 @@ jobs:
       - name: Run Gemma 4 bridge tests (no model download)
         env:
           PYTHONPATH: src:.
-        run: python -m pytest -q tests/test_gemma4_qat_capture.py
+        run: |
+          bash -n gemma4_qat_capture/run_mi300x_rocm.sh
+          python -m pytest -q tests/test_gemma4_qat_capture.py tests/test_gemma4_mi300x_rocm.py
