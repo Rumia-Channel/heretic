@@ -89,15 +89,18 @@ def _knn_distance(a: torch.Tensor, b: torch.Tensor, k: int) -> torch.Tensor:
     return torch.cdist(a, b).topk(k, largest=False, dim=1).values.mean()
 
 
-def optimise_ara_tensor_on_q4_0(
+def compute_ara_delta_q4_0(
     source: str | Path,
-    output: str | Path,
     *,
     tensor_name: str,
     module_io_npz: str | Path,
     options: Q4ARAOptions | None = None,
-) -> dict[str, Any]:
-    """Compute an ARA delta against a GGUF Q4_0 projection and patch the file."""
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Optimize one GGUF Q4_0 projection without writing a new multi-GB GGUF.
+
+    The returned float32 delta is in GGUF reader row-major matrix order.
+    Caller should apply multiple deltas in a SINGLE GGUF batch transaction.
+    """
     options = options or Q4ARAOptions()
     options.validate()
     try:
@@ -187,28 +190,41 @@ def optimise_ara_tensor_on_q4_0(
     if not np.isfinite(delta_np).all():
         raise FloatingPointError("Non-finite GGUF delta")
 
-    # Keep the intermediate delta only during the transaction. It is written
-    # to an independent output GGUF, never the source itself.
+    report: dict[str, Any] = {
+        "tensor": tensor_name,
+        "ara_initial_loss": initial_loss,
+        "ara_final_loss": final_loss,
+        "ara_options": asdict(options),
+        "training_io_path": str(Path(module_io_npz).resolve()),
+        "note": (
+            "Module-local Q4_0 surrogate objective; evaluate actual GGUF "
+            "with llama.cpp and d1 before accepting the candidate."
+        ),
+    }
+    return delta_np, report
+
+
+def optimise_ara_tensor_on_q4_0(
+    source: str | Path,
+    output: str | Path,
+    *,
+    tensor_name: str,
+    module_io_npz: str | Path,
+    options: Q4ARAOptions | None = None,
+) -> dict[str, Any]:
+    """Optimize a single GGUF Q4_0 projection and atomically create its GGUF."""
+    delta_np, metrics = compute_ara_delta_q4_0(
+        source,
+        tensor_name=tensor_name,
+        module_io_npz=module_io_npz,
+        options=options,
+    )
     with tempfile.TemporaryDirectory(prefix="heretic-q4-ara-") as work:
         delta_path = Path(work) / "delta.npy"
         np.save(delta_path, delta_np)
         report = patch_q4_0_tensor(
-            source,
-            output,
-            tensor_name=tensor_name,
-            delta_npy=delta_path,
-            max_abs_delta=options.max_abs_delta * 2,
+            source, output, tensor_name=tensor_name, delta_npy=delta_path,
+            max_abs_delta=(options or Q4ARAOptions()).max_abs_delta * 2,
         )
-    report.update(
-        {
-            "ara_initial_loss": initial_loss,
-            "ara_final_loss": final_loss,
-            "ara_options": asdict(options),
-            "training_io_path": str(Path(module_io_npz).resolve()),
-            "note": (
-                "Module-local objective only; run held-out llama.cpp and d1 "
-                "quality checks before using the edited GGUF."
-            ),
-        }
-    )
+    report.update(metrics)
     return report
