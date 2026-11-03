@@ -44,9 +44,8 @@ d1_sidecar_enabled = false
 d1_sidecar_model = "LiquidAI/d1-2B"
 d1_sidecar_device = "cpu"  # CPU by default so Gemma's GPU stays available.
 d1_sidecar_threshold = 0.75  # Provisional: calibrate on labeled Japanese outputs.
-d1_sidecar_max_samples = 24  # Spread across each evaluation set.
 d1_sidecar_max_input_chars = 8000
-d1_sidecar_strict = false  # Set true to abort evaluations on sidecar failures.
+d1_sidecar_strict = true  # Fail evaluations if the always-on judge fails.
 # evaluation_log_path = "ara-evaluation-with-d1.jsonl"
 
 
