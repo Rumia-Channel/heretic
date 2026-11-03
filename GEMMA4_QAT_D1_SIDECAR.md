@@ -58,7 +58,6 @@ d1_sidecar_enabled = true
 d1_sidecar_model = "LiquidAI/d1-2B"
 d1_sidecar_device = "cpu"
 d1_sidecar_threshold = 0.75
-d1_sidecar_max_samples = 24
 d1_sidecar_max_input_chars = 8000
 d1_sidecar_strict = true
 evaluation_log_path = "ara-evaluation-d1.jsonl"
@@ -101,14 +100,15 @@ With `evaluation_log_path` configured, each selected output contains:
 ```
 
 These are **illustrative values**, not measured benchmark results.
-Unsampled rows have `"d1_sidecar": null`; failed monitor calls record
+When disabled, `"d1_sidecar": null`; failed monitor calls record
 `"error"`, unless `d1_sidecar_strict=true` aborts the evaluation.
 
-The default 24 rows are spread deterministically through the evaluated
-prompt list. Counts printed to the console are counts **in that subsample**,
-not rates over the entire set.
+The judge is loaded once at Evaluator startup and monitors **every
+generated response** in each evaluation, including the baseline. Console
+counts correspond to the entire evaluated response list. Malformed judge
+output or unavailability aborts when `d1_sidecar_strict=true`.
 
-The sidecar is currently **diagnostic only**. It does not silently modify ARA's
+The always-loaded sidecar is currently **diagnostic only**. It does not silently modify ARA's
 Optuna score, reject a candidate, stop live token generation or decide whether
 a response is safe. Calibrate the threshold on separately annotated Japanese
 responses, especially intentional repetition (lists, poems, code) and
