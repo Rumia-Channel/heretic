@@ -18,6 +18,7 @@
 #include "chat.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -284,7 +285,11 @@ int main(int argc, char ** argv) {
         }
         capture_state state;
         state.layers = parse_layers(argv[5], llama_model_n_layer(model));
-        state.out = output_dir;
+        const fs::path staging = output_dir.parent_path() /
+            (output_dir.filename().string() + ".partial-" +
+             std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        if (fs::exists(staging)) throw std::runtime_error("Staging directory exists");
+        state.out = staging;
         // The GGUF carries Google's canonical template. Do not hardcode
         // <start_of_turn> or use llama_chat_apply_template's limited parser.
         auto templates = common_chat_templates_init(model, "");
@@ -298,11 +303,11 @@ int main(int argc, char ** argv) {
         ctx_params.cb_eval_user_data = &state;
         llama_context * ctx = llama_init_from_model(model, ctx_params);
         if (!ctx) throw std::runtime_error("Cannot initialize llama context with cb_eval");
-        fs::create_directories(output_dir);
+        fs::create_directories(staging);
         try {
             run_group("good", good, model, ctx, templates.get(), system, state, n_ctx, n_batch);
             run_group("bad", bad, model, ctx, templates.get(), system, state, n_ctx, n_batch);
-            std::ofstream manifest(output_dir / "capture.txt");
+            std::ofstream manifest(staging / "capture.txt");
             manifest << "format=gemma4.kqv_out.last_prompt_token.f32.v1\n";
             manifest << "good_count=" << good.size() << "\n";
             manifest << "bad_count=" << bad.size() << "\n";
@@ -310,7 +315,13 @@ int main(int argc, char ** argv) {
                 manifest << "layer=" << layer << ",features=" << width << "\n";
             }
             if (!manifest) throw std::runtime_error("Cannot finalize capture manifest");
+            manifest.close();
+            if (fs::exists(output_dir)) {
+                throw std::runtime_error("Output directory became occupied during capture");
+            }
+            fs::rename(staging, output_dir);
         } catch (...) {
+            fs::remove_all(staging);
             llama_free(ctx);
             throw;
         }
